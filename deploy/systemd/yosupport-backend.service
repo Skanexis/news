@@ -1,0 +1,15 @@
+[Unit]
+Description=YoSupport Backend
+After=network.target
+
+[Service]
+Type=simple
+User=<YOUR_LINUX_USER>
+WorkingDirectory=/opt/yosupport/app/backend
+ExecStart=/usr/bin/node index.js
+Environment=NODE_ENV=production
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

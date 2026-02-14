@@ -1,0 +1,3742 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pianificatore Annunci Telegram</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #070a16;
+      --bg-2: #0b1022;
+      --panel: rgba(16, 22, 42, 0.92);
+      --panel-soft: rgba(15, 20, 38, 0.78);
+      --stroke: rgba(122, 134, 179, 0.25);
+      --text: #e6ebff;
+      --muted: #8a93b5;
+      --accent: #4f6fdc;
+      --accent-2: #2aa3c7;
+      --accent-3: #d06c84;
+      --success: #2ee6a6;
+      --warning: #ffb347;
+      --danger: #ff5d7f;
+      --shadow: 0 28px 70px rgba(2, 6, 20, 0.65);
+      --glow: 0 0 24px rgba(79, 111, 220, 0.2);
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: 'Space Grotesk', sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at 15% 20%, rgba(79, 111, 220, 0.12), transparent 55%),
+                  radial-gradient(circle at 85% 10%, rgba(42, 163, 199, 0.12), transparent 55%),
+                  radial-gradient(circle at 70% 80%, rgba(208, 108, 132, 0.1), transparent 55%),
+                  linear-gradient(160deg, #060812 0%, #0c1226 60%, #080c18 100%);
+      min-height: 100vh;
+      overflow-x: hidden;
+      scrollbar-color: rgba(79, 111, 220, 0.5) rgba(12, 18, 36, 0.9);
+      scrollbar-width: thin;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    ::selection {
+      background: rgba(79, 111, 220, 0.45);
+      color: #fff;
+    }
+
+    ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: rgba(12, 18, 36, 0.8);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, rgba(79, 111, 220, 0.7), rgba(42, 163, 199, 0.6));
+      border-radius: 999px;
+      border: 2px solid rgba(12, 18, 36, 0.8);
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(180deg, rgba(79, 111, 220, 0.9), rgba(42, 163, 199, 0.8));
+    }
+
+    .bg-orb {
+      position: fixed;
+      z-index: -2;
+      border-radius: 999px;
+      filter: blur(40px);
+      opacity: 0.5;
+    }
+
+    .orb-a {
+      width: 420px;
+      height: 420px;
+      top: -180px;
+      left: -120px;
+      background: radial-gradient(circle, rgba(79, 111, 220, 0.65), rgba(79, 111, 220, 0));
+    }
+
+    .orb-b {
+      width: 380px;
+      height: 380px;
+      top: 10%;
+      right: -160px;
+      background: radial-gradient(circle, rgba(42, 163, 199, 0.6), rgba(42, 163, 199, 0));
+    }
+
+    .orb-c {
+      width: 300px;
+      height: 300px;
+      bottom: -120px;
+      right: 15%;
+      background: radial-gradient(circle, rgba(208, 108, 132, 0.45), rgba(208, 108, 132, 0));
+    }
+
+    .grid-glow {
+      position: fixed;
+      inset: 0;
+      background-image: linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+      background-size: 80px 80px;
+      opacity: 0.15;
+      pointer-events: none;
+      z-index: -3;
+    }
+
+    .app-shell {
+      width: min(1240px, 94vw);
+      margin: 30px auto 50px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .logo {
+      width: 56px;
+      height: 56px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(79, 111, 220, 0.95), rgba(42, 163, 199, 0.85));
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 700;
+      font-size: 20px;
+      box-shadow: var(--shadow);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: -0.02em;
+    }
+
+    .brand p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .top-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status {
+      padding: 10px 16px;
+      border-radius: 999px;
+      background: var(--panel-soft);
+      border: 1px solid var(--stroke);
+      font-size: 13px;
+      color: var(--muted);
+      box-shadow: inset 0 0 20px rgba(79, 111, 220, 0.15);
+    }
+
+    .status.success {
+      color: var(--success);
+    }
+
+    .status.error {
+      color: var(--danger);
+    }
+
+    .btn {
+      border: 1px solid var(--stroke);
+      background: rgba(14, 20, 38, 0.95);
+      color: var(--text);
+      padding: 10px 18px;
+      border-radius: var(--radius-sm);
+      font-size: 14px;
+      cursor: pointer;
+      transition: box-shadow 0.2s ease, border 0.2s ease, background 0.2s ease;
+    }
+
+    .btn:hover {
+      border-color: rgba(160, 170, 210, 0.45);
+      box-shadow: 0 10px 24px rgba(4, 10, 30, 0.35);
+    }
+
+    .btn:focus-visible {
+      outline: 2px solid rgba(79, 111, 220, 0.7);
+      outline-offset: 2px;
+    }
+
+    .btn:active {
+      transform: none;
+    }
+
+    .btn.primary {
+      border: 1px solid rgba(79, 111, 220, 0.55);
+      background: rgba(79, 111, 220, 0.22);
+      color: var(--text);
+      box-shadow: none;
+    }
+
+    .btn.ghost {
+      background: transparent;
+      border-color: rgba(124, 136, 179, 0.35);
+    }
+
+    .btn.xs {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    .btn.full {
+      width: 100%;
+      justify-content: center;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 14px;
+    }
+
+    .stat-card {
+      padding: 18px;
+      border-radius: var(--radius-md);
+      background: var(--panel);
+      border: 1px solid var(--stroke);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      position: relative;
+      overflow: hidden;
+      animation: rise-in 0.7s ease both;
+    }
+
+    .stat-card span {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .stat-card strong {
+      font-size: 26px;
+      font-weight: 600;
+    }
+
+    .section {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 18px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--muted);
+    }
+
+    .section-title::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: linear-gradient(90deg, rgba(79, 111, 220, 0.6), rgba(42, 163, 199, 0));
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .panel {
+      padding: 20px;
+      border-radius: var(--radius-lg);
+      background: var(--panel);
+      border: 1px solid var(--stroke);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-width: 0;
+      position: relative;
+      overflow: hidden;
+      animation: rise-in 0.75s ease both;
+      scroll-margin-top: 24px;
+    }
+
+    .panel.allow-overflow {
+      overflow: visible;
+      z-index: 20;
+    }
+
+    .panel.focused {
+      border-color: rgba(79, 111, 220, 0.65);
+      box-shadow: 0 0 0 2px rgba(79, 111, 220, 0.2), 0 24px 60px rgba(5, 10, 30, 0.6);
+    }
+
+    .panel::before,
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      inset: -40% -10% auto -10%;
+      height: 55%;
+      background: radial-gradient(circle, rgba(79, 111, 220, 0.28), transparent 65%);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+    }
+
+    .panel::after,
+    .stat-card::after {
+      content: '';
+      position: absolute;
+      inset: auto -30% -60% -30%;
+      height: 140%;
+      background: radial-gradient(circle, rgba(42, 163, 199, 0.18), transparent 55%);
+      opacity: 0.2;
+      transform: translateY(0);
+      animation: none;
+      pointer-events: none;
+    }
+
+    .panel:hover::before,
+    .stat-card:hover::before {
+      opacity: 1;
+    }
+
+    .panel:hover,
+    .stat-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(130, 144, 190, 0.45);
+      box-shadow: 0 24px 54px rgba(5, 10, 30, 0.6);
+    }
+
+    .panel-head h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .panel-head p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .field input,
+    .field select,
+    .field textarea {
+      border: 1px solid rgba(124, 136, 179, 0.35);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-size: 14px;
+      font-family: inherit;
+      background: rgba(8, 12, 26, 0.9);
+      color: var(--text);
+      outline: none;
+      width: 100%;
+      min-width: 0;
+      transition: border 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .field input::placeholder,
+    .field textarea::placeholder {
+      color: rgba(138, 147, 181, 0.7);
+    }
+
+    .field input:focus,
+    .field select:focus,
+    .field textarea:focus {
+      border-color: rgba(79, 111, 220, 0.6);
+      box-shadow: 0 0 0 3px rgba(79, 111, 220, 0.2);
+    }
+
+    .field input:disabled,
+    .field select:disabled,
+    .field textarea:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .field textarea {
+      resize: vertical;
+      min-height: 120px;
+    }
+
+    .field select {
+      appearance: none;
+      background-image:
+        linear-gradient(45deg, transparent 50%, rgba(138, 147, 181, 0.9) 50%),
+        linear-gradient(135deg, rgba(138, 147, 181, 0.9) 50%, transparent 50%),
+        linear-gradient(90deg, rgba(10, 15, 30, 0.9), rgba(10, 15, 30, 0.9));
+      background-position:
+        calc(100% - 18px) calc(50% - 3px),
+        calc(100% - 12px) calc(50% - 3px),
+        calc(100% - 40px) 50%;
+      background-size: 6px 6px, 6px 6px, 1px 60%;
+      background-repeat: no-repeat;
+      padding-right: 44px;
+    }
+
+    .native-select {
+      display: none;
+    }
+
+    .select-shell {
+      position: relative;
+      width: 100%;
+      z-index: 1;
+    }
+
+    .select-shell.open {
+      z-index: 200;
+    }
+
+    .select-display {
+      border: 1px solid rgba(124, 136, 179, 0.35);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-size: 14px;
+      background: rgba(8, 12, 26, 0.9);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      cursor: pointer;
+      transition: border 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .select-display:focus-visible {
+      outline: 2px solid rgba(79, 111, 220, 0.7);
+      outline-offset: 2px;
+    }
+
+    .select-display .select-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .select-display .select-caret {
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid rgba(138, 147, 181, 0.9);
+      border-bottom: 2px solid rgba(138, 147, 181, 0.9);
+      transform: rotate(45deg);
+      transition: transform 0.2s ease;
+      margin-left: auto;
+    }
+
+    .select-shell.open .select-display {
+      border-color: rgba(79, 111, 220, 0.6);
+      box-shadow: 0 0 0 3px rgba(79, 111, 220, 0.2);
+    }
+
+    .select-shell.open .select-caret {
+      transform: rotate(-135deg);
+    }
+
+    .select-menu {
+      position: absolute;
+      top: calc(100% + 10px);
+      left: 0;
+      right: 0;
+      background: rgba(9, 13, 28, 0.98);
+      border: 1px solid rgba(79, 111, 220, 0.35);
+      border-radius: var(--radius-sm);
+      box-shadow: 0 24px 50px rgba(4, 10, 30, 0.6);
+      z-index: 40;
+      display: none;
+      overflow: hidden;
+      pointer-events: auto;
+    }
+
+    .select-shell.open .select-menu {
+      display: block;
+    }
+
+
+    .select-search {
+      width: 100%;
+      padding: 10px 12px;
+      border: none;
+      border-bottom: 1px solid rgba(79, 111, 220, 0.2);
+      background: rgba(6, 10, 22, 0.95);
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+    }
+
+    .select-options {
+      max-height: 240px;
+      overflow: auto;
+    }
+
+    .select-option {
+      padding: 10px 12px;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+
+    .select-option:hover,
+    .select-option.active {
+      background: rgba(79, 111, 220, 0.18);
+    }
+
+    .select-empty {
+      padding: 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .date-shell {
+      position: relative;
+      width: 100%;
+    }
+
+    .date-shell.open {
+      z-index: 160;
+    }
+
+    .date-shell .date-input {
+      padding-right: 46px;
+    }
+
+    .date-trigger,
+    .time-trigger {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      border: 1px solid rgba(138, 147, 181, 0.5);
+      background: rgba(12, 18, 36, 0.9);
+      transform: translateY(-50%);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      transition: border 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .date-trigger:hover,
+    .time-trigger:hover {
+      border-color: rgba(160, 170, 210, 0.55);
+      box-shadow: 0 6px 14px rgba(4, 10, 30, 0.3);
+    }
+
+    .date-trigger::before {
+      content: '';
+      width: 14px;
+      height: 12px;
+      border: 1px solid rgba(138, 147, 181, 0.7);
+      border-radius: 3px;
+      box-shadow: inset 0 -4px 0 rgba(138, 147, 181, 0.25);
+    }
+
+    .time-trigger::before {
+      content: '';
+      width: 14px;
+      height: 14px;
+      border: 1px solid rgba(138, 147, 181, 0.7);
+      border-radius: 999px;
+      box-shadow: inset 0 0 0 2px rgba(138, 147, 181, 0.25);
+    }
+
+    .time-trigger::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 1px;
+      height: 6px;
+      background: rgba(138, 147, 181, 0.8);
+      transform: translate(-50%, -6px);
+    }
+
+    .date-picker {
+      position: absolute;
+      top: calc(100% + 10px);
+      left: 0;
+      width: min(320px, 92vw);
+      max-width: 100%;
+      background: rgba(9, 13, 28, 0.98);
+      border: 1px solid rgba(79, 111, 220, 0.35);
+      border-radius: var(--radius-sm);
+      box-shadow: 0 24px 50px rgba(4, 10, 30, 0.6);
+      z-index: 60;
+      display: none;
+      overflow: hidden;
+    }
+
+    .date-shell.open .date-picker {
+      display: block;
+    }
+
+    .date-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: rgba(10, 15, 30, 0.95);
+      border-bottom: 1px solid rgba(79, 111, 220, 0.2);
+    }
+
+    .date-label {
+      font-size: 12px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .date-nav {
+      width: 30px;
+      height: 30px;
+      border-radius: 10px;
+      border: 1px solid rgba(79, 111, 220, 0.35);
+      background: rgba(12, 18, 36, 0.8);
+      color: var(--text);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .date-nav:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 20px rgba(4, 10, 30, 0.35);
+    }
+
+    .date-week {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+      padding: 10px 12px 0;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .date-week span {
+      text-align: center;
+    }
+
+    .date-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+      padding: 8px 12px 12px;
+    }
+
+    .date-day {
+      border: none;
+      background: rgba(8, 12, 26, 0.85);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 8px 0;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.2s ease, transform 0.2s ease;
+    }
+
+    .date-day:hover {
+      background: rgba(79, 111, 220, 0.2);
+      transform: translateY(-1px);
+    }
+
+    .date-day.is-muted {
+      color: rgba(138, 147, 181, 0.5);
+    }
+
+    .date-day.is-today {
+      border: 1px solid rgba(42, 163, 199, 0.5);
+    }
+
+    .date-day.is-selected {
+      background: linear-gradient(135deg, rgba(79, 111, 220, 0.95), rgba(42, 163, 199, 0.9));
+      color: #0b0f1d;
+      font-weight: 600;
+    }
+
+    .time-shell {
+      position: relative;
+      width: 100%;
+    }
+
+    .time-shell.open {
+      z-index: 160;
+    }
+
+    .time-shell .time-input {
+      padding-right: 46px;
+    }
+
+    .time-picker {
+      position: absolute;
+      top: calc(100% + 10px);
+      left: 0;
+      width: min(320px, 92vw);
+      max-width: 100%;
+      background: rgba(9, 13, 28, 0.98);
+      border: 1px solid rgba(79, 111, 220, 0.35);
+      border-radius: var(--radius-sm);
+      box-shadow: 0 24px 50px rgba(4, 10, 30, 0.6);
+      z-index: 60;
+      display: none;
+      overflow: hidden;
+    }
+
+    .time-shell.open .time-picker {
+      display: block;
+    }
+
+    .time-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: rgba(10, 15, 30, 0.95);
+      border-bottom: 1px solid rgba(79, 111, 220, 0.2);
+    }
+
+    .time-label {
+      font-size: 12px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .time-now {
+      border: 1px solid rgba(79, 111, 220, 0.4);
+      background: rgba(79, 111, 220, 0.18);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .time-body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 14px 12px 10px;
+    }
+
+    .time-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .time-step {
+      width: 36px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid rgba(124, 136, 179, 0.45);
+      background: rgba(12, 18, 36, 0.85);
+      color: var(--text);
+      cursor: pointer;
+      transition: border 0.2s ease, background 0.2s ease;
+    }
+
+    .time-step:hover {
+      border-color: rgba(79, 111, 220, 0.6);
+      background: rgba(79, 111, 220, 0.18);
+    }
+
+    .time-value {
+      min-width: 64px;
+      text-align: center;
+      font-size: 22px;
+      font-weight: 600;
+      padding: 6px 0;
+      border-radius: 10px;
+      border: 1px solid rgba(124, 136, 179, 0.35);
+      background: rgba(8, 12, 26, 0.9);
+      letter-spacing: 0.08em;
+    }
+
+    .time-sep {
+      font-size: 20px;
+      color: var(--muted);
+      padding: 0 2px;
+    }
+
+    .time-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 12px 12px;
+    }
+
+    .time-chip {
+      border: 1px solid rgba(124, 136, 179, 0.35);
+      background: rgba(12, 18, 36, 0.8);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: border 0.2s ease, background 0.2s ease;
+    }
+
+    .time-chip:hover {
+      border-color: rgba(79, 111, 220, 0.6);
+      background: rgba(79, 111, 220, 0.18);
+    }
+
+    input[type=\"date\"],
+    input[type=\"time\"] {
+      position: relative;
+      color-scheme: dark;
+    }
+
+    input[type=\"date\"]::-webkit-calendar-picker-indicator,
+    input[type=\"time\"]::-webkit-calendar-picker-indicator {
+      filter: invert(1);
+      opacity: 0.7;
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .switch {
+      appearance: none;
+      width: 44px;
+      height: 24px;
+      flex: 0 0 44px;
+      background: rgba(10, 14, 26, 0.9);
+      border-radius: 8px;
+      position: relative;
+      cursor: pointer;
+      border: 1px solid rgba(124, 136, 179, 0.5);
+      transition: background 0.2s ease, border 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .switch::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 16px;
+      height: 16px;
+      background: rgba(230, 235, 255, 0.95);
+      border-radius: 6px;
+      box-shadow: inset 0 0 0 1px rgba(10, 14, 26, 0.5);
+      transition: transform 0.2s ease;
+    }
+
+    .switch:checked {
+      background: rgba(79, 111, 220, 0.25);
+      border-color: rgba(79, 111, 220, 0.6);
+      box-shadow: 0 0 0 2px rgba(79, 111, 220, 0.15);
+    }
+
+    .switch:checked::after {
+      transform: translateX(20px);
+    }
+
+    .switch:focus-visible {
+      outline: 2px solid rgba(79, 111, 220, 0.6);
+      outline-offset: 2px;
+    }
+
+    .hint {
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .scheduler-forecast {
+      border: 1px solid rgba(124, 136, 179, 0.25);
+      border-radius: var(--radius-sm);
+      background: rgba(8, 12, 26, 0.52);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .forecast-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .forecast-head strong {
+      font-size: 14px;
+      color: var(--text);
+    }
+
+    .forecast-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .forecast-item {
+      border: 1px solid rgba(124, 136, 179, 0.2);
+      border-radius: 8px;
+      background: rgba(8, 12, 26, 0.45);
+      padding: 8px 10px;
+      display: grid;
+      gap: 3px;
+    }
+
+    .forecast-item span {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .forecast-item strong {
+      font-size: 14px;
+      color: var(--text);
+    }
+
+    .forecast-block {
+      border: 1px solid rgba(124, 136, 179, 0.2);
+      border-radius: 8px;
+      background: rgba(8, 12, 26, 0.42);
+      padding: 8px 10px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .forecast-block-title {
+      font-size: 12px;
+      color: var(--text);
+      margin: 0;
+    }
+
+    .forecast-text {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .forecast-table table {
+      min-width: 100%;
+      font-size: 12px;
+    }
+
+    .forecast-table th,
+    .forecast-table td {
+      padding: 8px 10px;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--stroke);
+      background: rgba(8, 12, 26, 0.8);
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .table-wrap::-webkit-scrollbar {
+      height: 8px;
+      width: 8px;
+    }
+
+    .table-wrap::-webkit-scrollbar-track {
+      background: rgba(8, 12, 26, 0.9);
+    }
+
+    .table-wrap::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, rgba(79, 111, 220, 0.7), rgba(42, 163, 199, 0.6));
+      border-radius: 999px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      min-width: 640px;
+    }
+
+    thead {
+      background: rgba(12, 18, 36, 0.85);
+    }
+
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid rgba(120, 130, 170, 0.2);
+      vertical-align: top;
+      white-space: nowrap;
+    }
+
+    tbody tr:hover {
+      background: rgba(79, 111, 220, 0.08);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text);
+      border: 1px solid rgba(79, 111, 220, 0.35);
+      background: rgba(12, 18, 36, 0.7);
+      box-shadow: inset 0 0 10px rgba(79, 111, 220, 0.2);
+      position: relative;
+    }
+
+    .pill::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: currentColor;
+      box-shadow: 0 0 10px currentColor;
+    }
+
+    .pill.success {
+      color: var(--success);
+      border-color: rgba(46, 230, 166, 0.4);
+      background: rgba(14, 28, 26, 0.8);
+      box-shadow: inset 0 0 14px rgba(46, 230, 166, 0.2);
+    }
+
+    .pill.pending {
+      color: var(--warning);
+      border-color: rgba(255, 179, 71, 0.45);
+      background: rgba(30, 22, 14, 0.8);
+      box-shadow: inset 0 0 14px rgba(255, 179, 71, 0.2);
+    }
+
+    .pill.scheduled {
+      color: var(--warning);
+      border-color: rgba(255, 179, 71, 0.45);
+      background: rgba(30, 22, 14, 0.8);
+      box-shadow: inset 0 0 14px rgba(255, 179, 71, 0.2);
+    }
+
+    .pill.paused {
+      color: var(--muted);
+      border-color: rgba(138, 147, 181, 0.35);
+      background: rgba(12, 18, 36, 0.7);
+      box-shadow: inset 0 0 12px rgba(138, 147, 181, 0.15);
+    }
+
+    .pill.failed {
+      color: var(--danger);
+      border-color: rgba(255, 93, 127, 0.45);
+      background: rgba(30, 14, 20, 0.8);
+      box-shadow: inset 0 0 14px rgba(255, 93, 127, 0.2);
+    }
+
+    .pill.expired {
+      color: var(--danger);
+      border-color: rgba(255, 93, 127, 0.45);
+      background: rgba(30, 14, 20, 0.8);
+      box-shadow: inset 0 0 14px rgba(255, 93, 127, 0.2);
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .posts-toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .posts-toolbar .field {
+      margin: 0;
+    }
+
+    .posts-by-company-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .company-post-card {
+      border: 1px solid rgba(124, 136, 179, 0.3);
+      border-radius: var(--radius-sm);
+      background: rgba(8, 12, 26, 0.55);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .company-post-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .company-post-title {
+      font-size: 14px;
+      color: var(--text);
+      margin: 0;
+    }
+
+    .company-post-meta {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .company-post-items {
+      display: grid;
+      gap: 8px;
+    }
+
+    .company-post-item {
+      border: 1px solid rgba(124, 136, 179, 0.22);
+      border-radius: 9px;
+      padding: 8px 10px;
+      background: rgba(8, 12, 26, 0.5);
+      display: grid;
+      gap: 4px;
+    }
+
+    .company-post-item-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+    }
+
+    .company-post-item-text {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.3;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    .posts-empty {
+      border: 1px dashed rgba(124, 136, 179, 0.35);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      font-size: 12px;
+      color: var(--muted);
+      text-align: center;
+      background: rgba(8, 12, 26, 0.4);
+    }
+
+    .choice-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .helper-steps {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .helper-step {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid rgba(124, 136, 179, 0.25);
+      background: rgba(8, 12, 26, 0.5);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .helper-step strong {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: rgba(79, 111, 220, 0.22);
+      color: var(--text);
+      font-size: 12px;
+      flex: 0 0 22px;
+    }
+
+    .post-checklist {
+      border: 1px solid rgba(124, 136, 179, 0.25);
+      border-radius: var(--radius-sm);
+      background: rgba(8, 12, 26, 0.45);
+      padding: 10px 12px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .post-check-item {
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .post-check-item::before {
+      content: '•';
+      color: rgba(138, 147, 181, 0.8);
+    }
+
+    .post-check-item.ok {
+      color: var(--success);
+    }
+
+    .post-check-item.ok::before {
+      content: '✓';
+      color: var(--success);
+    }
+
+    .quick-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .post-buttons-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .post-button-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 220px) auto;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .post-button-row .btn {
+      white-space: nowrap;
+    }
+
+    .check {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .check input {
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      flex: 0 0 18px;
+      border-radius: 4px;
+      border: 1px solid rgba(124, 136, 179, 0.55);
+      background: rgba(8, 12, 26, 0.9);
+      display: grid;
+      place-items: center;
+      position: relative;
+      transition: border 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    }
+
+    .check input::after {
+      content: none;
+    }
+
+    .check input:checked {
+      border-color: rgba(79, 111, 220, 0.9);
+      box-shadow: 0 0 0 2px rgba(79, 111, 220, 0.18);
+      background: rgba(79, 111, 220, 0.9);
+    }
+
+    .check input[type="checkbox"]::after {
+      content: none;
+    }
+
+    .check input[type="checkbox"] {
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: 13px 11px;
+    }
+
+    .check input[type="checkbox"]:checked {
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10'><path d='M1 5l3 3 7-7' fill='none' stroke='%230b0f1d' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    }
+
+    .check input[type="radio"] {
+      border-radius: 999px;
+    }
+
+    .check input[type="radio"]::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #0b0f1d;
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(0);
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+
+    .check input[type="radio"]:checked::after {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    .check input:focus-visible {
+      outline: 2px solid rgba(79, 111, 220, 0.65);
+      outline-offset: 2px;
+    }
+
+    .check input:checked + span {
+      color: var(--text);
+    }
+
+    .drafts-toolbar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .draft-search input {
+      width: 100%;
+    }
+
+    .drafts-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 520px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+
+    .draft-card {
+      border: 1px solid rgba(124, 136, 179, 0.25);
+      border-radius: var(--radius-sm);
+      background: rgba(8, 12, 26, 0.65);
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .draft-card.active {
+      border-color: rgba(79, 111, 220, 0.65);
+      box-shadow: inset 0 0 0 1px rgba(79, 111, 220, 0.28);
+    }
+
+    .draft-card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .draft-card-title {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.2;
+    }
+
+    .draft-card-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .draft-card-text {
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.35;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    .draft-card-media {
+      border: 1px solid rgba(124, 136, 179, 0.25);
+      border-radius: 9px;
+      overflow: hidden;
+      background: rgba(8, 12, 26, 0.7);
+      max-height: 220px;
+      display: grid;
+      place-items: center;
+    }
+
+    .draft-card-media img,
+    .draft-card-media video {
+      width: 100%;
+      display: block;
+      object-fit: cover;
+      max-height: 220px;
+      background: #05070f;
+    }
+
+    .draft-card-file {
+      font-size: 11px;
+      color: var(--muted);
+      word-break: break-all;
+    }
+
+    .draft-empty {
+      border: 1px dashed rgba(124, 136, 179, 0.35);
+      border-radius: var(--radius-sm);
+      padding: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+      background: rgba(8, 12, 26, 0.45);
+    }
+
+    .topbar {
+      animation: fade-in 0.6s ease both;
+    }
+
+    .stats-grid .stat-card:nth-child(1) { animation-delay: 0.05s; }
+    .stats-grid .stat-card:nth-child(2) { animation-delay: 0.1s; }
+    .stats-grid .stat-card:nth-child(3) { animation-delay: 0.15s; }
+    .stats-grid .stat-card:nth-child(4) { animation-delay: 0.2s; }
+    .stats-grid .stat-card:nth-child(5) { animation-delay: 0.25s; }
+    .grid .panel:nth-child(1) { animation-delay: 0.08s; }
+    .grid .panel:nth-child(2) { animation-delay: 0.16s; }
+    .grid .panel:nth-child(3) { animation-delay: 0.24s; }
+    .grid .panel:nth-child(4) { animation-delay: 0.32s; }
+    .grid .panel:nth-child(5) { animation-delay: 0.4s; }
+
+    @keyframes rise-in {
+      from {
+        opacity: 0;
+        transform: translateY(14px) scale(0.98);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    @keyframes fade-in {
+      from {
+        opacity: 0;
+        transform: translateY(-6px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes glow-pulse {
+      0% {
+        opacity: 0.22;
+        transform: translateY(6%);
+      }
+      50% {
+        opacity: 0.4;
+        transform: translateY(-4%);
+      }
+      100% {
+        opacity: 0.22;
+        transform: translateY(6%);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .panel,
+      .stat-card,
+      .topbar {
+        animation: none;
+      }
+      .panel::after,
+      .stat-card::after {
+        animation: none;
+      }
+      .panel:hover,
+      .stat-card:hover,
+      .btn:hover {
+        transform: none;
+      }
+    }
+
+    .span-12 { grid-column: span 12; }
+    .span-8 { grid-column: span 8; }
+    .span-7 { grid-column: span 7; }
+    .span-6 { grid-column: span 6; }
+    .span-5 { grid-column: span 5; }
+    .span-4 { grid-column: span 4; }
+
+    @media (max-width: 1100px) {
+      .grid {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+      }
+      .span-8, .span-7, .span-6 { grid-column: span 6; }
+      .span-5, .span-4 { grid-column: span 6; }
+    }
+
+    @media (max-width: 860px) {
+      .topbar {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .top-actions {
+        width: 100%;
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .top-actions .btn,
+      .top-actions .status {
+        width: 100%;
+      }
+      .form-grid {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+      }
+      .span-6, .span-5, .span-4 { grid-column: span 6; }
+      .post-button-row {
+        grid-template-columns: 1fr;
+      }
+      .post-button-row .btn {
+        width: 100%;
+      }
+      .helper-steps {
+        grid-template-columns: 1fr;
+      }
+      .drafts-toolbar {
+        grid-template-columns: 1fr;
+      }
+      .posts-toolbar {
+        grid-template-columns: 1fr;
+      }
+      .forecast-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .app-shell {
+        width: 94vw;
+        margin: 20px auto 40px;
+      }
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .brand h1 {
+        font-size: 22px;
+      }
+      .brand p {
+        font-size: 12px;
+      }
+      .logo {
+        width: 46px;
+        height: 46px;
+        font-size: 18px;
+        border-radius: 14px;
+      }
+      .stats-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+      .row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .row .btn {
+        width: 100%;
+      }
+      .span-12, .span-8, .span-7, .span-6, .span-5, .span-4 { grid-column: span 1; }
+      table {
+        min-width: 520px;
+        font-size: 12px;
+      }
+      th, td {
+        padding: 10px;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+      table { min-width: 480px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-orb orb-a"></div>
+  <div class="bg-orb orb-b"></div>
+  <div class="bg-orb orb-c"></div>
+  <div class="grid-glow"></div>
+
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">TG</div>
+        <div>
+          <h1>Pianificatore Annunci Telegram</h1>
+          <p>Centro di controllo per campagne Telegram pianificate.</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div id="status" class="status">Pronto.</div>
+        <button class="btn ghost" id="refreshBtn">Aggiorna</button>
+        <button class="btn primary" id="runScheduleBtn">Esegui Pianificazione</button>
+        <button class="btn ghost" id="resetPostBtn">Nuovo Post</button>
+      </div>
+    </header>
+
+    <section class="stats-grid">
+      <div class="stat-card">
+        <span>Aziende</span>
+        <strong id="statCompanies">0</strong>
+      </div>
+      <div class="stat-card">
+        <span>Post Attivi</span>
+        <strong id="statActivePosts">0</strong>
+      </div>
+      <div class="stat-card">
+        <span>Bozze</span>
+        <strong id="statDrafts">0</strong>
+      </div>
+      <div class="stat-card">
+        <span>Piano Oggi</span>
+        <strong id="statSchedule">0</strong>
+      </div>
+      <div class="stat-card">
+        <span>Log Oggi</span>
+        <strong id="statLogs">0</strong>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">Pianificazione</div>
+      <div class="grid">
+        <div class="panel span-4 allow-overflow" id="settingsPanel">
+          <div class="panel-head">
+            <h3>Avvio Automatico</h3>
+            <p>Generazione giornaliera e ritmo di pubblicazione.</p>
+          </div>
+          <div class="form-grid">
+            <label class="field span-6">
+              <span>Attivo</span>
+              <div class="toggle-row">
+                <input type="checkbox" id="scheduleEnabled" class="switch">
+                <span class="muted" id="scheduleEnabledLabel">Attivo</span>
+              </div>
+            </label>
+            <label class="field span-6">
+              <span>Ora di avvio</span>
+              <div class="time-shell">
+                <input type="text" id="scheduleTime" class="time-input" placeholder="HH:MM" autocomplete="off" inputmode="numeric">
+                <button class="time-trigger" type="button" aria-label="Apri selettore orario"></button>
+              </div>
+            </label>
+            <label class="field span-6">
+              <span>Ora fine runtime</span>
+              <div class="time-shell">
+                <input type="text" id="runtimeEndTime" class="time-input" placeholder="HH:MM" autocomplete="off" inputmode="numeric">
+                <button class="time-trigger" type="button" aria-label="Apri selettore orario"></button>
+              </div>
+            </label>
+            <label class="field span-6">
+              <span>Intervallo minimo (min)</span>
+              <input type="number" id="minIntervalMinutes" min="1" step="1">
+            </label>
+            <label class="field span-6">
+              <span>Intervallo tra rotazioni (min)</span>
+              <input type="number" id="rotationGapMinutes" min="0" step="1">
+            </label>
+          </div>
+          <button class="btn primary full" id="saveSettingsBtn">Salva Impostazioni</button>
+          <p class="hint">Quando termina una rotazione completa, il sistema applica l'intervallo extra prima di iniziare la successiva.</p>
+          <div id="schedulerForecast" class="scheduler-forecast"></div>
+        </div>
+
+        <div class="panel span-8 allow-overflow" id="companiesPanel">
+          <div class="panel-head">
+            <h3>Aziende</h3>
+            <p>Destinazioni Telegram con orario preferito opzionale.</p>
+          </div>
+          <div class="form-grid">
+            <label class="field span-6">
+              <span>Nome azienda</span>
+              <input type="text" id="companyName" placeholder="Acme Studio">
+            </label>
+            <label class="field span-6">
+              <span>Orario preferito</span>
+              <div class="time-shell">
+                <input type="text" id="companyPreferredTime" class="time-input" placeholder="HH:MM" autocomplete="off" inputmode="numeric">
+                <button class="time-trigger" type="button" aria-label="Apri selettore orario"></button>
+              </div>
+            </label>
+            <label class="field span-6">
+              <span>ID canale Telegram</span>
+              <input type="text" id="companyTelegramId" placeholder="-100123456789">
+            </label>
+            <label class="field span-6">
+              <span>URL pubblica Telegram</span>
+              <input type="url" id="companyTelegramUrl" placeholder="https://t.me/brand">
+            </label>
+          </div>
+          <div class="row">
+            <button class="btn primary" id="saveCompanyBtn">Salva Azienda</button>
+            <button class="btn ghost" id="clearCompanyBtn">Pulisci</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Nome</th>
+                  <th>Telegram</th>
+                  <th>Preferito</th>
+                  <th>Post</th>
+                  <th>Azioni</th>
+                </tr>
+              </thead>
+              <tbody id="companiesTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="section">
+      <div class="section-title">Contenuti</div>
+      <div class="grid">
+        <div class="panel span-5 allow-overflow" id="draftsPanel">
+          <div class="panel-head">
+            <h3>Bozze Telegram</h3>
+            <p>Seleziona una bozza in 1 clic e collegala subito al post.</p>
+          </div>
+          <div class="row">
+            <button class="btn" id="pullDraftsBtn">Sincronizza bozze</button>
+            <button class="btn ghost" id="refreshDraftsBtn">Aggiorna elenco</button>
+          </div>
+          <div class="drafts-toolbar">
+            <label class="field draft-search">
+              <span>Cerca bozza</span>
+              <input type="text" id="draftSearch" placeholder="ID, testo, tipo...">
+            </label>
+            <button class="btn ghost" id="useLatestDraftBtn" type="button">Usa ultima</button>
+          </div>
+          <div id="draftsList" class="drafts-list"></div>
+          <p class="hint">Le bozze compaiono dopo la sincronizzazione. Premi Usa e il post verrà collegato subito alla bozza selezionata.</p>
+        </div>
+
+        <div class="panel span-7 allow-overflow" id="postComposerPanel">
+          <div class="panel-head">
+            <h3>Compositore Post</h3>
+            <p>Compila il post passo per passo e premi Salva Post.</p>
+          </div>
+          <div class="helper-steps">
+            <div class="helper-step"><strong>1</strong><span>Azienda e periodo</span></div>
+            <div class="helper-step"><strong>2</strong><span>Testo o bozza Telegram</span></div>
+            <div class="helper-step"><strong>3</strong><span>Salva il post</span></div>
+          </div>
+          <div id="postChecklist" class="post-checklist"></div>
+          <div class="form-grid">
+            <label class="field span-6">
+              <span>Azienda</span>
+              <select id="postCompany" class="native-select" data-search="true"></select>
+            </label>
+            <div class="field span-6">
+              <span>Attivo</span>
+              <label class="check">
+                <input type="checkbox" id="postActive" checked>
+                <span>Attivo</span>
+              </label>
+            </div>
+            <label class="field span-6">
+              <span>Data inizio</span>
+              <div class="date-shell">
+                <input type="text" id="postStartDate" class="date-input" placeholder="YYYY-MM-DD" autocomplete="off" inputmode="numeric">
+                <button class="date-trigger" type="button" aria-label="Apri calendario"></button>
+              </div>
+            </label>
+            <label class="field span-6">
+              <span>Data fine</span>
+              <div class="date-shell">
+                <input type="text" id="postEndDate" class="date-input" placeholder="YYYY-MM-DD" autocomplete="off" inputmode="numeric">
+                <button class="date-trigger" type="button" aria-label="Apri calendario"></button>
+              </div>
+            </label>
+            <div class="field span-12">
+              <span>Periodo rapido</span>
+              <div class="quick-presets">
+                <button class="btn xs ghost" id="postPresetTodayBtn" type="button">Solo oggi</button>
+                <button class="btn xs ghost" id="postPresetWeekBtn" type="button">7 giorni</button>
+                <button class="btn xs ghost" id="postPresetMonthBtn" type="button">30 giorni</button>
+                <button class="btn xs ghost" id="focusDraftsBtn" type="button">Apri bozze</button>
+              </div>
+            </div>
+            <input type="hidden" id="postDraft">
+            <label class="field span-12">
+              <span>Testo (opzionale se bozza collegata)</span>
+              <textarea id="postText" rows="4" placeholder="Testo del post Telegram"></textarea>
+            </label>
+          </div>
+          <div class="row">
+            <button class="btn primary" id="savePostBtn">Salva Post</button>
+            <button class="btn ghost" id="clearPostBtn">Pulisci</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="section">
+      <div class="section-title">Operativita</div>
+      <div class="grid">
+        <div class="panel span-7">
+          <div class="panel-head">
+            <h3>Post</h3>
+            <p>Gestisci campagne e azioni rapide.</p>
+          </div>
+          <div class="posts-toolbar">
+            <label class="field">
+              <span>Filtro azienda</span>
+              <select id="postsCompanyFilter" class="native-select" data-search="true"></select>
+            </label>
+            <button class="btn ghost" type="button" id="clearPostsFilterBtn">Mostra tutte</button>
+          </div>
+          <div id="postsByCompanyList" class="posts-by-company-list"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Azienda</th>
+                  <th>Contenuto</th>
+                  <th>Periodo</th>
+                  <th>Azioni</th>
+                </tr>
+              </thead>
+              <tbody id="postsTable"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel span-5">
+          <div class="panel-head">
+            <h3>Timeline Pianificazione</h3>
+            <p>Invii pianificati per il giorno selezionato.</p>
+          </div>
+          <label class="field">
+            <span>Data pianificazione</span>
+            <div class="date-shell">
+              <input type="text" id="scheduleDate" class="date-input" placeholder="YYYY-MM-DD" autocomplete="off" inputmode="numeric">
+              <button class="date-trigger" type="button" aria-label="Apri calendario"></button>
+            </div>
+          </label>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ora</th>
+                  <th>Post</th>
+                  <th>Stato</th>
+                </tr>
+              </thead>
+              <tbody id="scheduleTable"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel span-12">
+          <div class="panel-head">
+            <h3>Log Invii</h3>
+            <p>Storico invii riusciti e falliti.</p>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ora</th>
+                  <th>Azienda</th>
+                  <th>Stato</th>
+                  <th>Dettagli</th>
+                </tr>
+              </thead>
+              <tbody id="logsTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    function readApiBaseOverride() {
+      try {
+        const params = new URLSearchParams(window.location.search || '');
+        const fromQuery = String(params.get('api') || '').trim();
+        if (fromQuery) return fromQuery;
+      } catch (e) {}
+
+      try {
+        const fromStorage = String(window.localStorage.getItem('yosupport_api_base') || '').trim();
+        if (fromStorage) return fromStorage;
+      } catch (e) {}
+
+      return '';
+    }
+
+    function resolveApiBase() {
+      const override = readApiBaseOverride();
+      if (override) return override.replace(/\/+$/, '');
+      const protocol = String(window.location.protocol || '').toLowerCase();
+      if (protocol === 'http:' || protocol === 'https:') {
+        const host = String(window.location.hostname || '').toLowerCase();
+        const port = String(window.location.port || '');
+        const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+        if (isLocalHost && port === '3000') {
+          return window.location.origin;
+        }
+        return `${window.location.origin}/api`;
+      }
+      return 'http://localhost:3000';
+    }
+
+    const API = resolveApiBase();
+
+    const state = {
+      companies: [],
+      drafts: [],
+      posts: [],
+      logs: [],
+      scheduleItems: [],
+      schedulerForecast: null,
+      settings: null,
+      companyEditId: null,
+      postEditId: null,
+      scheduleDate: new Date().toISOString().slice(0, 10),
+      draftSearch: '',
+      postsCompanyFilter: ''
+    };
+    const POST_DRAFT_STORAGE_KEY = 'yosupport_post_form_draft_v1';
+    const POST_DRAFT_STORAGE_VERSION = 1;
+    const POST_DRAFT_DEBOUNCE_MS = 250;
+    let postDraftRestoreDone = false;
+    let savingPost = false;
+    let savingCompany = false;
+
+    const byId = (id) => document.getElementById(id);
+
+    const els = {
+      refreshBtn: byId('refreshBtn'),
+      runScheduleBtn: byId('runScheduleBtn'),
+      resetPostBtn: byId('resetPostBtn'),
+      status: byId('status'),
+      scheduleEnabled: byId('scheduleEnabled'),
+      scheduleEnabledLabel: byId('scheduleEnabledLabel'),
+      scheduleTime: byId('scheduleTime'),
+      runtimeEndTime: byId('runtimeEndTime'),
+      minIntervalMinutes: byId('minIntervalMinutes'),
+      rotationGapMinutes: byId('rotationGapMinutes'),
+      saveSettingsBtn: byId('saveSettingsBtn'),
+      schedulerForecast: byId('schedulerForecast'),
+      companyName: byId('companyName'),
+      companyPreferredTime: byId('companyPreferredTime'),
+      companyTelegramId: byId('companyTelegramId'),
+      companyTelegramUrl: byId('companyTelegramUrl'),
+      saveCompanyBtn: byId('saveCompanyBtn'),
+      clearCompanyBtn: byId('clearCompanyBtn'),
+      companiesTable: byId('companiesTable'),
+      companiesPanel: byId('companiesPanel'),
+      draftsPanel: byId('draftsPanel'),
+      pullDraftsBtn: byId('pullDraftsBtn'),
+      refreshDraftsBtn: byId('refreshDraftsBtn'),
+      draftSearch: byId('draftSearch'),
+      useLatestDraftBtn: byId('useLatestDraftBtn'),
+      draftsList: byId('draftsList'),
+      postCompany: byId('postCompany'),
+      postActive: byId('postActive'),
+      postStartDate: byId('postStartDate'),
+      postEndDate: byId('postEndDate'),
+      postPresetTodayBtn: byId('postPresetTodayBtn'),
+      postPresetWeekBtn: byId('postPresetWeekBtn'),
+      postPresetMonthBtn: byId('postPresetMonthBtn'),
+      focusDraftsBtn: byId('focusDraftsBtn'),
+      postDraft: byId('postDraft'),
+      postChecklist: byId('postChecklist'),
+      postText: byId('postText'),
+      savePostBtn: byId('savePostBtn'),
+      clearPostBtn: byId('clearPostBtn'),
+      postsTable: byId('postsTable'),
+      postsCompanyFilter: byId('postsCompanyFilter'),
+      clearPostsFilterBtn: byId('clearPostsFilterBtn'),
+      postsByCompanyList: byId('postsByCompanyList'),
+      postComposerPanel: byId('postComposerPanel'),
+      scheduleDate: byId('scheduleDate'),
+      scheduleTable: byId('scheduleTable'),
+      logsTable: byId('logsTable'),
+      statCompanies: byId('statCompanies'),
+      statActivePosts: byId('statActivePosts'),
+      statDrafts: byId('statDrafts'),
+      statSchedule: byId('statSchedule'),
+      statLogs: byId('statLogs')
+    };
+
+    function setStatus(message, type) {
+      els.status.textContent = message;
+      els.status.className = `status${type ? ' ' + type : ''}`;
+    }
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function formatDate(value) {
+      if (!value) return '-';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleDateString();
+    }
+
+    function formatDateTime(value) {
+      if (!value) return '-';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString();
+    }
+
+    function shorten(value, limit = 60) {
+      const text = String(value || '').trim();
+      if (!text) return '-';
+      if (text.length <= limit) return text;
+      return text.slice(0, limit) + '...';
+    }
+
+    function debounce(fn, delayMs) {
+      let timer = null;
+      return (...args) => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), delayMs);
+      };
+    }
+
+    function addDaysToIsoDate(value, days) {
+      const base = parseIsoDate(value);
+      if (!base) return '';
+      const next = new Date(base);
+      next.setDate(next.getDate() + Number(days || 0));
+      return formatIsoDate(next);
+    }
+
+    function collectPostFormSnapshot() {
+      return {
+        companyId: Number(els.postCompany.value || 0) || null,
+        startDate: els.postStartDate.value.trim(),
+        endDate: els.postEndDate.value.trim(),
+        active: els.postActive.checked ? 1 : 0,
+        draftId: els.postDraft.value ? Number(els.postDraft.value) : null,
+        text: els.postText.value.trim()
+      };
+    }
+
+    function hasPostFormData(snapshot) {
+      if (!snapshot || typeof snapshot !== 'object') return false;
+      if (snapshot.companyId) return true;
+      if (snapshot.startDate || snapshot.endDate) return true;
+      if (snapshot.draftId || snapshot.text) return true;
+      return false;
+    }
+
+    function clearPostFormDraft() {
+      try {
+        localStorage.removeItem(POST_DRAFT_STORAGE_KEY);
+      } catch (err) {
+        // ignore storage access issues
+      }
+    }
+
+    function savePostFormDraft() {
+      if (state.postEditId) return;
+      const snapshot = collectPostFormSnapshot();
+      if (!hasPostFormData(snapshot)) {
+        clearPostFormDraft();
+        return;
+      }
+      try {
+        localStorage.setItem(POST_DRAFT_STORAGE_KEY, JSON.stringify({
+          v: POST_DRAFT_STORAGE_VERSION,
+          updatedAt: new Date().toISOString(),
+          snapshot
+        }));
+      } catch (err) {
+        // ignore storage access issues
+      }
+    }
+
+    function restorePostFormDraft() {
+      if (postDraftRestoreDone || state.postEditId) return;
+      postDraftRestoreDone = true;
+      try {
+        const raw = localStorage.getItem(POST_DRAFT_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!parsed || parsed.v !== POST_DRAFT_STORAGE_VERSION || !parsed.snapshot) return;
+        const snapshot = parsed.snapshot;
+        if (!hasPostFormData(snapshot)) return;
+        els.postCompany.value = snapshot.companyId ? String(snapshot.companyId) : '';
+        els.postStartDate.value = snapshot.startDate || '';
+        els.postEndDate.value = snapshot.endDate || '';
+        els.postActive.checked = Number(snapshot.active) !== 0;
+        els.postDraft.value = snapshot.draftId ? String(snapshot.draftId) : '';
+        els.postText.value = snapshot.text || '';
+        refreshCustomSelect(els.postCompany);
+        renderDrafts();
+        updatePostChecklist();
+        setStatus('Bozza non salvata ripristinata.', 'success');
+      } catch (err) {
+        // ignore corrupt draft payload
+      }
+    }
+
+    const schedulePostDraftSave = debounce(savePostFormDraft, POST_DRAFT_DEBOUNCE_MS);
+
+    function useDraftInPostForm(draft) {
+      if (!draft) return;
+      els.postDraft.value = String(draft.id);
+      if (!els.postText.value) {
+        els.postText.value = draft.caption || draft.text || '';
+      }
+      renderDrafts();
+      updatePostChecklist();
+      schedulePostDraftSave();
+      setStatus(`Bozza #${draft.id} collegata al post.`, 'success');
+      focusPanel(els.postComposerPanel, els.postText);
+    }
+
+    function getPostValidation() {
+      const companyId = Number(els.postCompany.value || 0);
+      const startDate = els.postStartDate.value.trim();
+      const endDate = els.postEndDate.value.trim();
+      const hasCompany = companyId > 0;
+      const hasDates = isValidDateString(startDate) && isValidDateString(endDate) && startDate <= endDate;
+      const hasContent = Boolean(els.postText.value.trim()) || Boolean(els.postDraft.value);
+      const ready = hasCompany && hasDates && hasContent;
+      return { hasCompany, hasDates, hasContent, ready };
+    }
+
+    function updatePostChecklist() {
+      const checks = getPostValidation();
+      const rows = [
+        { ok: checks.hasCompany, text: 'Azienda selezionata' },
+        { ok: checks.hasDates, text: 'Date compilate correttamente' },
+        { ok: checks.hasContent, text: 'Presente testo o bozza selezionata' }
+      ];
+      if (els.postChecklist) {
+        els.postChecklist.innerHTML = rows.map((row) => (
+          `<div class="post-check-item${row.ok ? ' ok' : ''}">${escapeHtml(row.text)}</div>`
+        )).join('');
+      }
+      els.savePostBtn.disabled = savingPost || !checks.ready;
+      return checks;
+    }
+
+    function getSelectedLabel(selectEl) {
+      if (!selectEl) return '';
+      const option = selectEl.options[selectEl.selectedIndex];
+      return option ? option.text : '';
+    }
+
+    function buildCustomSelect(selectEl) {
+      if (!selectEl || selectEl.dataset.customReady === '1') return;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'select-shell';
+      wrapper.dataset.for = selectEl.id;
+
+      const display = document.createElement('div');
+      display.className = 'select-display';
+      display.tabIndex = 0;
+      const text = document.createElement('span');
+      text.className = 'select-text';
+      const caret = document.createElement('span');
+      caret.className = 'select-caret';
+      display.appendChild(text);
+      display.appendChild(caret);
+
+      const menu = document.createElement('div');
+      menu.className = 'select-menu';
+      const searchable = selectEl.dataset.search === 'true';
+      let searchInput = null;
+      if (searchable) {
+        searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.className = 'select-search';
+        searchInput.placeholder = 'Cerca...';
+        menu.appendChild(searchInput);
+      }
+      const optionsWrap = document.createElement('div');
+      optionsWrap.className = 'select-options';
+      menu.appendChild(optionsWrap);
+
+      wrapper.appendChild(display);
+      wrapper.appendChild(menu);
+      selectEl.insertAdjacentElement('afterend', wrapper);
+
+      const updateDisplay = () => {
+        const label = getSelectedLabel(selectEl) || 'Seleziona';
+        text.textContent = label;
+      };
+
+      const buildOptions = () => {
+        optionsWrap.innerHTML = '';
+        const query = (searchInput ? searchInput.value.trim().toLowerCase() : '');
+        const options = Array.from(selectEl.options);
+        const filtered = query
+          ? options.filter((option) => option.text.toLowerCase().includes(query))
+          : options;
+        if (!filtered.length) {
+          const empty = document.createElement('div');
+          empty.className = 'select-empty';
+          empty.textContent = 'Nessun risultato';
+          optionsWrap.appendChild(empty);
+          return;
+        }
+        filtered.forEach((option) => {
+          const item = document.createElement('div');
+          item.className = 'select-option';
+          if (option.value === selectEl.value) item.classList.add('active');
+          item.dataset.value = option.value;
+          item.textContent = option.text;
+          item.addEventListener('click', () => {
+            selectEl.value = option.value;
+            selectEl.dispatchEvent(new Event('change'));
+            updateDisplay();
+            wrapper.classList.remove('open');
+          });
+          optionsWrap.appendChild(item);
+        });
+      };
+
+      const openMenu = () => {
+        wrapper.classList.add('open');
+        if (searchInput) {
+          searchInput.value = '';
+          buildOptions();
+          setTimeout(() => searchInput.focus(), 0);
+        } else {
+          buildOptions();
+        }
+      };
+
+      const closeAll = () => {
+        document.querySelectorAll('.select-shell.open').forEach((node) => node.classList.remove('open'));
+      };
+
+      display.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const isOpen = wrapper.classList.contains('open');
+        closeAll();
+        if (!isOpen) openMenu();
+      });
+
+      display.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          const isOpen = wrapper.classList.contains('open');
+          closeAll();
+          if (!isOpen) openMenu();
+        }
+        if (event.key === 'Escape') {
+          wrapper.classList.remove('open');
+        }
+      });
+
+      if (searchInput) {
+        searchInput.addEventListener('input', buildOptions);
+      }
+
+      menu.addEventListener('pointerdown', (event) => event.stopPropagation());
+
+      document.addEventListener('pointerdown', (event) => {
+        if (!wrapper.contains(event.target)) wrapper.classList.remove('open');
+      });
+
+      selectEl.dataset.customReady = '1';
+      selectEl._customSelect = { wrapper, updateDisplay, buildOptions };
+      updateDisplay();
+    }
+
+    function refreshCustomSelect(selectEl) {
+      if (!selectEl) return;
+      if (!selectEl.dataset.customReady) {
+        buildCustomSelect(selectEl);
+        return;
+      }
+      const api = selectEl._customSelect;
+      if (api) {
+        api.updateDisplay();
+        api.buildOptions();
+      }
+    }
+
+    function focusPanel(panelEl, focusEl) {
+      if (!panelEl) return;
+      panelEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      panelEl.classList.add('focused');
+      if (panelEl._focusTimer) clearTimeout(panelEl._focusTimer);
+      panelEl._focusTimer = setTimeout(() => panelEl.classList.remove('focused'), 1600);
+      if (focusEl && typeof focusEl.focus === 'function') {
+        setTimeout(() => focusEl.focus({ preventScroll: true }), 220);
+      }
+    }
+
+    function isValidDateString(value) {
+      return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+    }
+
+    function parseIsoDate(value) {
+      if (!isValidDateString(value)) return null;
+      const date = new Date(`${value}T00:00:00`);
+      if (Number.isNaN(date.getTime())) return null;
+      return date;
+    }
+
+    function formatIsoDate(date) {
+      const pad = (num) => String(num).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    }
+
+    function maybeAutoAdjustPostEndDate() {
+      const start = els.postStartDate.value.trim();
+      if (!isValidDateString(start)) return;
+      const end = els.postEndDate.value.trim();
+      if (!isValidDateString(end) || end < start) {
+        const suggested = addDaysToIsoDate(start, 30);
+        if (suggested) els.postEndDate.value = suggested;
+      }
+    }
+
+    function applyPostDatePreset(days) {
+      const today = formatIsoDate(new Date());
+      const base = isValidDateString(els.postStartDate.value) ? els.postStartDate.value : today;
+      els.postStartDate.value = base;
+      els.postEndDate.value = addDaysToIsoDate(base, days);
+      updatePostChecklist();
+      schedulePostDraftSave();
+    }
+
+    function closeAllDatePickers(except) {
+      document.querySelectorAll('.date-shell.open').forEach((node) => {
+        if (node !== except) node.classList.remove('open');
+      });
+    }
+
+    function closeAllTimePickers(except) {
+      document.querySelectorAll('.time-shell.open').forEach((node) => {
+        if (node !== except) node.classList.remove('open');
+      });
+    }
+
+    function buildDatePicker(input) {
+      if (!input || input.dataset.dateReady === '1') return;
+      const shell = input.closest('.date-shell');
+      if (!shell) return;
+      const trigger = shell.querySelector('.date-trigger');
+
+      const picker = document.createElement('div');
+      picker.className = 'date-picker';
+
+      const head = document.createElement('div');
+      head.className = 'date-head';
+      const prev = document.createElement('button');
+      prev.type = 'button';
+      prev.className = 'date-nav';
+      prev.textContent = '‹';
+      const next = document.createElement('button');
+      next.type = 'button';
+      next.className = 'date-nav';
+      next.textContent = '›';
+      const label = document.createElement('div');
+      label.className = 'date-label';
+      head.appendChild(prev);
+      head.appendChild(label);
+      head.appendChild(next);
+
+      const week = document.createElement('div');
+      week.className = 'date-week';
+      ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'].forEach((name) => {
+        const span = document.createElement('span');
+        span.textContent = name;
+        week.appendChild(span);
+      });
+
+      const grid = document.createElement('div');
+      grid.className = 'date-grid';
+
+      picker.appendChild(head);
+      picker.appendChild(week);
+      picker.appendChild(grid);
+      shell.appendChild(picker);
+
+      let viewDate = parseIsoDate(input.value) || new Date();
+      viewDate.setDate(1);
+
+      const render = () => {
+        const selected = parseIsoDate(input.value);
+        const year = viewDate.getFullYear();
+        const month = viewDate.getMonth();
+        label.textContent = viewDate.toLocaleString('it-IT', { month: 'long', year: 'numeric' });
+        grid.innerHTML = '';
+
+        const first = new Date(year, month, 1);
+        const startOffset = (first.getDay() + 6) % 7;
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const daysPrev = new Date(year, month, 0).getDate();
+
+        const todayKey = formatIsoDate(new Date());
+        const selectedKey = selected ? formatIsoDate(selected) : null;
+
+        for (let i = 0; i < 42; i += 1) {
+          let dayNum;
+          let offset = 0;
+          if (i < startOffset) {
+            dayNum = daysPrev - startOffset + i + 1;
+            offset = -1;
+          } else if (i >= startOffset + daysInMonth) {
+            dayNum = i - (startOffset + daysInMonth) + 1;
+            offset = 1;
+          } else {
+            dayNum = i - startOffset + 1;
+          }
+
+          const dateObj = new Date(year, month + offset, dayNum);
+          const value = formatIsoDate(dateObj);
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'date-day';
+          if (offset !== 0) btn.classList.add('is-muted');
+          if (value === todayKey) btn.classList.add('is-today');
+          if (selectedKey && value === selectedKey) btn.classList.add('is-selected');
+          btn.textContent = String(dayNum);
+          btn.addEventListener('click', () => {
+            input.value = value;
+            input.dispatchEvent(new Event('change'));
+            shell.classList.remove('open');
+          });
+          grid.appendChild(btn);
+        }
+      };
+
+      const openPicker = () => {
+        closeAllDatePickers(shell);
+        closeAllTimePickers();
+        shell.classList.add('open');
+        const base = parseIsoDate(input.value) || new Date();
+        viewDate = new Date(base.getFullYear(), base.getMonth(), 1);
+        render();
+      };
+
+      const togglePicker = () => {
+        const isOpen = shell.classList.contains('open');
+        if (isOpen) shell.classList.remove('open');
+        else openPicker();
+      };
+
+      prev.addEventListener('click', () => {
+        viewDate.setMonth(viewDate.getMonth() - 1);
+        render();
+      });
+
+      next.addEventListener('click', () => {
+        viewDate.setMonth(viewDate.getMonth() + 1);
+        render();
+      });
+
+      input.addEventListener('pointerdown', (event) => {
+        event.stopPropagation();
+        togglePicker();
+      });
+
+      if (trigger) {
+        trigger.addEventListener('pointerdown', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          togglePicker();
+        });
+      }
+
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') shell.classList.remove('open');
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          const isOpen = shell.classList.contains('open');
+          if (isOpen) shell.classList.remove('open');
+          else openPicker();
+        }
+      });
+
+      input.addEventListener('input', () => {
+        if (shell.classList.contains('open')) render();
+      });
+
+      picker.addEventListener('pointerdown', (event) => event.stopPropagation());
+      document.addEventListener('pointerdown', (event) => {
+        if (!shell.contains(event.target)) shell.classList.remove('open');
+      });
+
+      input.dataset.dateReady = '1';
+    }
+
+    function isValidTimeString(value) {
+      if (typeof value !== 'string') return false;
+      const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+      if (!match) return false;
+      const hours = Number(match[1]);
+      const minutes = Number(match[2]);
+      if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return false;
+      return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+    }
+
+    function formatTimeString(hours, minutes) {
+      const pad = (num) => String(num).padStart(2, '0');
+      return `${pad(hours)}:${pad(minutes)}`;
+    }
+
+    function parseTimeString(value) {
+      if (!isValidTimeString(value)) return null;
+      const [h, m] = value.trim().split(':').map(Number);
+      return { hours: h, minutes: m };
+    }
+
+    function buildTimePicker(input) {
+      if (!input || input.dataset.timeReady === '1') return;
+      const shell = input.closest('.time-shell');
+      if (!shell) return;
+      const trigger = shell.querySelector('.time-trigger');
+
+      const picker = document.createElement('div');
+      picker.className = 'time-picker';
+
+      const head = document.createElement('div');
+      head.className = 'time-head';
+      const label = document.createElement('div');
+      label.className = 'time-label';
+      label.textContent = 'Seleziona orario';
+      const nowBtn = document.createElement('button');
+      nowBtn.type = 'button';
+      nowBtn.className = 'time-now';
+      nowBtn.textContent = 'Adesso';
+      head.appendChild(label);
+      head.appendChild(nowBtn);
+
+      const body = document.createElement('div');
+      body.className = 'time-body';
+
+      const hourCol = document.createElement('div');
+      hourCol.className = 'time-col';
+      const hourUp = document.createElement('button');
+      hourUp.type = 'button';
+      hourUp.className = 'time-step';
+      hourUp.textContent = '+';
+      const hourValue = document.createElement('div');
+      hourValue.className = 'time-value';
+      const hourDown = document.createElement('button');
+      hourDown.type = 'button';
+      hourDown.className = 'time-step';
+      hourDown.textContent = '−';
+      hourCol.appendChild(hourUp);
+      hourCol.appendChild(hourValue);
+      hourCol.appendChild(hourDown);
+
+      const sep = document.createElement('div');
+      sep.className = 'time-sep';
+      sep.textContent = ':';
+
+      const minCol = document.createElement('div');
+      minCol.className = 'time-col';
+      const minUp = document.createElement('button');
+      minUp.type = 'button';
+      minUp.className = 'time-step';
+      minUp.textContent = '+';
+      const minValue = document.createElement('div');
+      minValue.className = 'time-value';
+      const minDown = document.createElement('button');
+      minDown.type = 'button';
+      minDown.className = 'time-step';
+      minDown.textContent = '−';
+      minCol.appendChild(minUp);
+      minCol.appendChild(minValue);
+      minCol.appendChild(minDown);
+
+      body.appendChild(hourCol);
+      body.appendChild(sep);
+      body.appendChild(minCol);
+
+      const presets = document.createElement('div');
+      presets.className = 'time-presets';
+
+      picker.appendChild(head);
+      picker.appendChild(body);
+      picker.appendChild(presets);
+      shell.appendChild(picker);
+
+      const updateDisplay = () => {
+        const current = parseTimeString(input.value) || { hours: 9, minutes: 0 };
+        hourValue.textContent = String(current.hours).padStart(2, '0');
+        minValue.textContent = String(current.minutes).padStart(2, '0');
+      };
+
+      const applyTime = (hoursValue, minutesValue) => {
+        const normalizedHours = (hoursValue + 24) % 24;
+        const normalizedMinutes = (minutesValue + 60) % 60;
+        input.value = formatTimeString(normalizedHours, normalizedMinutes);
+        input.dispatchEvent(new Event('change'));
+        updateDisplay();
+      };
+
+      const adjustTime = (part, delta, step = 1) => {
+        const current = parseTimeString(input.value) || { hours: 9, minutes: 0 };
+        if (part === 'hour') {
+          applyTime(current.hours + delta, current.minutes);
+        } else {
+          let minutesValue = current.minutes + delta * step;
+          let hoursValue = current.hours;
+          while (minutesValue >= 60) {
+            minutesValue -= 60;
+            hoursValue += 1;
+          }
+          while (minutesValue < 0) {
+            minutesValue += 60;
+            hoursValue -= 1;
+          }
+          applyTime(hoursValue, minutesValue);
+        }
+      };
+
+      hourUp.addEventListener('click', () => adjustTime('hour', 1));
+      hourDown.addEventListener('click', () => adjustTime('hour', -1));
+      minUp.addEventListener('click', () => adjustTime('minute', 1, 5));
+      minDown.addEventListener('click', () => adjustTime('minute', -1, 5));
+
+      const presetDefs = [
+        { label: '+1m', offset: 1 },
+        { label: '+10m', offset: 10 },
+        { label: '+30m', offset: 30 },
+        { label: '+1h', offset: 60 },
+        { label: '09:00', value: '09:00' },
+        { label: '12:00', value: '12:00' },
+        { label: '18:00', value: '18:00' },
+        { label: '21:00', value: '21:00' }
+      ];
+
+      presetDefs.forEach((preset) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'time-chip';
+        btn.textContent = preset.label;
+        btn.addEventListener('click', () => {
+          if (preset.value) {
+            const parsed = parseTimeString(preset.value);
+            if (parsed) applyTime(parsed.hours, parsed.minutes);
+            return;
+          }
+          if (preset.offset) {
+            const current = parseTimeString(input.value) || { hours: 9, minutes: 0 };
+            const total = current.hours * 60 + current.minutes + preset.offset;
+            const normalizedTotal = (total % (24 * 60) + (24 * 60)) % (24 * 60);
+            const hoursValue = Math.floor(normalizedTotal / 60);
+            const minutesValue = normalizedTotal % 60;
+            applyTime(hoursValue, minutesValue);
+          }
+        });
+        presets.appendChild(btn);
+      });
+
+      const openPicker = () => {
+        closeAllTimePickers(shell);
+        closeAllDatePickers();
+        shell.classList.add('open');
+        updateDisplay();
+      };
+
+      const togglePicker = () => {
+        const isOpen = shell.classList.contains('open');
+        if (isOpen) shell.classList.remove('open');
+        else openPicker();
+      };
+
+      input.addEventListener('pointerdown', (event) => {
+        event.stopPropagation();
+        togglePicker();
+      });
+
+      if (trigger) {
+        trigger.addEventListener('pointerdown', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          togglePicker();
+        });
+      }
+
+      input.addEventListener('blur', () => {
+        if (!input.value) return;
+        if (!isValidTimeString(input.value)) {
+          input.value = '';
+        } else {
+          const parsed = parseTimeString(input.value);
+          if (parsed) input.value = formatTimeString(parsed.hours, parsed.minutes);
+        }
+        updateDisplay();
+      });
+
+      input.addEventListener('change', updateDisplay);
+
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') shell.classList.remove('open');
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          togglePicker();
+        }
+      });
+
+      nowBtn.addEventListener('click', () => {
+        const now = new Date();
+        applyTime(now.getHours(), now.getMinutes());
+      });
+
+      input.addEventListener('input', updateDisplay);
+
+      picker.addEventListener('pointerdown', (event) => event.stopPropagation());
+      document.addEventListener('pointerdown', (event) => {
+        if (!shell.contains(event.target)) shell.classList.remove('open');
+      });
+
+      input.dataset.timeReady = '1';
+      updateDisplay();
+    }
+
+    async function fetchJson(path, options) {
+      const response = await fetch(`${API}${path}`, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || 'Richiesta fallita');
+      }
+      return data;
+    }
+
+    function translateDeliveryStatus(status) {
+      if (status === 'sent') return 'inviato';
+      if (status === 'failed') return 'fallito';
+      if (status === 'pending') return 'in attesa';
+      return status || '';
+    }
+
+    function formatMediaType(mediaType) {
+      const value = String(mediaType || '').toLowerCase();
+      if (value === 'text') return 'testo';
+      if (value === 'photo') return 'foto';
+      if (value === 'video') return 'video';
+      if (value === 'document') return 'documento';
+      return mediaType || 'testo';
+    }
+
+    function buildSchedulerForecastPath(useFormValues = false) {
+      const params = new URLSearchParams();
+      params.set('date', state.scheduleDate);
+      if (useFormValues) {
+        params.set('startTime', String(els.scheduleTime.value || '').trim());
+        params.set('endTime', String(els.runtimeEndTime.value || '').trim());
+        params.set('minIntervalMinutes', String(Number(els.minIntervalMinutes.value || 0)));
+        params.set('rotationGapMinutes', String(Number(els.rotationGapMinutes.value || 0)));
+      }
+      return `/schedule/forecast?${params.toString()}`;
+    }
+
+    async function loadSchedulerForecast(options = {}) {
+      const { silent = true, useFormValues = false } = options;
+      try {
+        const forecast = await fetchJson(buildSchedulerForecastPath(useFormValues));
+        state.schedulerForecast = forecast || null;
+        renderSchedulerForecast();
+      } catch (err) {
+        state.schedulerForecast = { error: err.message || 'Calcolo previsione fallito.' };
+        renderSchedulerForecast();
+        if (!silent) {
+          setStatus(err.message || 'Calcolo previsione fallito.', 'error');
+        }
+      }
+    }
+
+    function resolveDraftMediaUrl(filePath) {
+      const normalized = String(filePath || '')
+        .replace(/\\/g, '/')
+        .replace(/^\/+/, '');
+      if (!normalized) return '';
+      return `${API}/${normalized}`;
+    }
+
+    function summarizePostContent(post) {
+      if (post?.draftId) {
+        const mediaLabel = formatMediaType(post.draftMediaType || 'text');
+        const text = post.draftCaption || post.draftText || post.text || '';
+        return {
+          label: `Bozza #${post.draftId} (${mediaLabel})`,
+          preview: text || 'Bozza senza testo'
+        };
+      }
+      return {
+        label: 'Testo manuale',
+        preview: post?.text || 'Nessun testo'
+      };
+    }
+
+    function getFilteredPosts() {
+      const selectedCompanyId = Number(state.postsCompanyFilter || 0);
+      if (!selectedCompanyId) return [...state.posts];
+      return state.posts.filter((post) => Number(post.companyId) === selectedCompanyId);
+    }
+
+    async function loadAll() {
+      setStatus('Caricamento dati...');
+      try {
+        const [companies, drafts, posts, logs, settings, scheduleItems, schedulerForecast] = await Promise.all([
+          fetchJson('/companies'),
+          fetchJson('/drafts'),
+          fetchJson('/posts'),
+          fetchJson('/logs'),
+          fetchJson('/settings'),
+          fetchJson(`/schedule/items?date=${state.scheduleDate}`),
+          fetchJson(`/schedule/forecast?date=${state.scheduleDate}`)
+        ]);
+        state.companies = companies || [];
+        state.drafts = drafts || [];
+        state.posts = posts || [];
+        state.logs = logs || [];
+        state.settings = settings || null;
+        state.scheduleItems = scheduleItems || [];
+        state.schedulerForecast = schedulerForecast || null;
+        renderAll();
+        setStatus('Aggiornato.', 'success');
+      } catch (err) {
+        setStatus(err.message || 'Caricamento dati fallito.', 'error');
+      }
+    }
+
+    async function loadSchedule() {
+      try {
+        const items = await fetchJson(`/schedule/items?date=${state.scheduleDate}`);
+        state.scheduleItems = items || [];
+        renderSchedule();
+        await loadSchedulerForecast({ silent: true, useFormValues: true });
+        updateSummary();
+      } catch (err) {
+        setStatus(err.message || 'Caricamento pianificazione fallito.', 'error');
+      }
+    }
+    function renderSettings() {
+      if (!state.settings) return;
+      els.scheduleEnabled.checked = Boolean(Number(state.settings.scheduleEnabled));
+      els.scheduleEnabledLabel.textContent = els.scheduleEnabled.checked ? 'Attivo' : 'Disattivo';
+      els.scheduleTime.value = state.settings.scheduleTime || '';
+      els.runtimeEndTime.value = state.settings.runtimeEndTime || '';
+      els.minIntervalMinutes.value = state.settings.minIntervalMinutes || 20;
+      els.rotationGapMinutes.value = state.settings.rotationGapMinutes || 0;
+    }
+
+    function renderSchedulerForecast() {
+      if (!els.schedulerForecast) return;
+      const data = state.schedulerForecast;
+      if (!data) {
+        els.schedulerForecast.innerHTML = '<div class="forecast-text">Nessun calcolo disponibile.</div>';
+        return;
+      }
+      if (data.error) {
+        els.schedulerForecast.innerHTML = `<div class="forecast-text">${escapeHtml(data.error)}</div>`;
+        return;
+      }
+
+      const totals = data.totals || {};
+      const config = data.config || {};
+      const perPost = Array.isArray(data.perPost) ? data.perPost : [];
+      const distribution = Array.isArray(data.publishDistribution) ? data.publishDistribution : [];
+      const suggestions = data.suggestions || {};
+
+      const distributionText = distribution.length
+        ? distribution.map((row) => `${row.postCount} post x ${row.publishCount} invii`).join(' • ')
+        : 'Nessun invio nel runtime corrente.';
+
+      const suggestionOverall = suggestions.overall
+        ? `${suggestions.overall.scheduleTime} → ${suggestions.overall.runtimeEndTime}, intervallo ${suggestions.overall.minIntervalMinutes}m, pausa rotazione ${suggestions.overall.rotationGapMinutes}m (${suggestions.overall.expectedPublications} invii, ${suggestions.overall.expectedFullRotations} rotazioni complete)`
+        : 'Nessuna combinazione ottimale trovata con i parametri correnti.';
+      const suggestionInterval = suggestions.interval
+        ? `${suggestions.interval.minIntervalMinutes} min (${suggestions.interval.expectedPublications} invii, ${suggestions.interval.expectedFullRotations} rotazioni complete)`
+        : 'Nessun intervallo che distribuisce in modo perfettamente uniforme.';
+      const suggestionEnd = suggestions.endTime
+        ? `${suggestions.endTime.runtimeEndTime} (${suggestions.endTime.expectedPublications} invii, ${suggestions.endTime.expectedFullRotations} rotazioni complete)`
+        : 'Nessun orario fine valido per rotazioni complete.';
+      const suggestionStart = suggestions.startTime
+        ? `${suggestions.startTime.scheduleTime} (${suggestions.startTime.expectedPublications} invii, ${suggestions.startTime.expectedFullRotations} rotazioni complete)`
+        : 'Nessun orario avvio valido per rotazioni complete.';
+
+      const perPostRows = perPost.map((row) => `
+        <tr>
+          <td>${escapeHtml(row.companyName || `#${row.postId}`)}</td>
+          <td>${escapeHtml(String(row.publishCount || 0))}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="2" class="muted">Nessun post attivo.</td></tr>';
+
+      els.schedulerForecast.innerHTML = `
+        <div class="forecast-head">
+          <strong>Previsione runtime</strong>
+          <span class="muted">${escapeHtml(String(data.date || '-'))}</span>
+        </div>
+        <div class="forecast-grid">
+          <div class="forecast-item">
+            <span>Finestra</span>
+            <strong>${escapeHtml(`${totals.windowStartTime || '-'} → ${totals.windowEndTime || '-'}`)}</strong>
+          </div>
+          <div class="forecast-item">
+            <span>Post Attivi</span>
+            <strong>${escapeHtml(String(totals.activePosts || 0))}</strong>
+          </div>
+          <div class="forecast-item">
+            <span>Pubblicazioni Totali</span>
+            <strong>${escapeHtml(String(totals.totalPublications || 0))}</strong>
+          </div>
+          <div class="forecast-item">
+            <span>Rotazioni Complete</span>
+            <strong>${escapeHtml(String(totals.fullRotations || 0))}</strong>
+          </div>
+          <div class="forecast-item">
+            <span>Parziali Ultima Rotazione</span>
+            <strong>${escapeHtml(String(totals.partialPublications || 0))}</strong>
+          </div>
+          <div class="forecast-item">
+            <span>Distribuzione Uniforme</span>
+            <strong>${totals.equalRotations ? 'SI' : 'NO'}</strong>
+          </div>
+        </div>
+        <div class="forecast-block">
+          <h4 class="forecast-block-title">Distribuzione Per Numero Invii</h4>
+          <div class="forecast-text">${escapeHtml(distributionText)}</div>
+          <div class="forecast-text">Intervallo: ${escapeHtml(String(config.minIntervalMinutes || 0))} min, pausa rotazione: ${escapeHtml(String(config.rotationGapMinutes || 0))} min.</div>
+        </div>
+        <div class="forecast-block">
+          <h4 class="forecast-block-title">Suggerimenti Automatici</h4>
+          <div class="forecast-text">Combinazione completa: ${escapeHtml(suggestionOverall)}</div>
+          <div class="forecast-text">Solo intervallo: ${escapeHtml(suggestionInterval)}</div>
+          <div class="forecast-text">Solo fine runtime: ${escapeHtml(suggestionEnd)}</div>
+          <div class="forecast-text">Solo avvio runtime: ${escapeHtml(suggestionStart)}</div>
+        </div>
+        <div class="forecast-block forecast-table">
+          <h4 class="forecast-block-title">Invii Previsti Per Post</h4>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Post</th>
+                  <th>Invii previsti</th>
+                </tr>
+              </thead>
+              <tbody>${perPostRows}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderCompanies() {
+      els.companiesTable.innerHTML = state.companies.map((company) => {
+        return `
+          <tr>
+            <td>#${company.id}</td>
+            <td>${escapeHtml(company.name)}</td>
+            <td>${escapeHtml(company.telegramChannelId || '-')}</td>
+            <td>${escapeHtml(company.preferredTime || '-')}</td>
+            <td>${company.postCount || 0}</td>
+            <td>
+              <div class="row">
+                <button class="btn xs" data-action="company-edit" data-id="${company.id}">Modifica</button>
+                <button class="btn xs ghost" data-action="company-delete" data-id="${company.id}">Elimina</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('') || '<tr><td colspan="6" class="muted">Nessuna azienda presente.</td></tr>';
+
+      els.postCompany.innerHTML = '<option value="">Seleziona azienda</option>' + state.companies.map((company) => (
+        `<option value="${company.id}">${escapeHtml(company.name)}</option>`
+      )).join('');
+      refreshCustomSelect(els.postCompany);
+
+      const selectedFilter = String(state.postsCompanyFilter || '');
+      const filterOptions = ['<option value="">Tutte le aziende</option>']
+        .concat(state.companies.map((company) => (
+          `<option value="${company.id}">${escapeHtml(company.name)}</option>`
+        )));
+      els.postsCompanyFilter.innerHTML = filterOptions.join('');
+      const hasSelectedFilter = !selectedFilter || state.companies.some((company) => String(company.id) === selectedFilter);
+      state.postsCompanyFilter = hasSelectedFilter ? selectedFilter : '';
+      els.postsCompanyFilter.value = state.postsCompanyFilter;
+      refreshCustomSelect(els.postsCompanyFilter);
+    }
+
+    function renderDrafts() {
+      if (els.draftSearch && els.draftSearch.value !== state.draftSearch) {
+        els.draftSearch.value = state.draftSearch;
+      }
+      const query = String(state.draftSearch || '').trim().toLowerCase();
+      const selectedDraftValue = String(els.postDraft.value || '');
+      const selectedDraftId = Number(selectedDraftValue || 0);
+      const filtered = state.drafts.filter((draft) => {
+        if (!query) return true;
+        const haystack = [
+          draft.id,
+          draft.mediaType,
+          draft.caption,
+          draft.text,
+          draft.fileName
+        ].map((part) => String(part || '').toLowerCase()).join(' ');
+        return haystack.includes(query);
+      });
+
+      els.draftsList.innerHTML = filtered.map((draft) => {
+        const preview = draft.caption || draft.text || '';
+        const isActive = selectedDraftId === Number(draft.id);
+        const previewText = preview ? shorten(preview, 220) : 'Nessun testo in questa bozza';
+        const mediaUrl = resolveDraftMediaUrl(draft.filePath);
+        const mediaType = String(draft.mediaType || '').toLowerCase();
+        const mediaPreview = mediaUrl && mediaType === 'photo'
+          ? `<div class="draft-card-media"><img src="${escapeHtml(mediaUrl)}" alt="Anteprima bozza #${draft.id}" loading="lazy"></div>`
+          : mediaUrl && mediaType === 'video'
+            ? `<div class="draft-card-media"><video src="${escapeHtml(mediaUrl)}" controls preload="metadata"></video></div>`
+            : '';
+        const fileMeta = draft.fileName
+          ? `<div class="draft-card-file">${escapeHtml(draft.fileName)}</div>`
+          : '';
+        return `
+          <article class="draft-card${isActive ? ' active' : ''}">
+            <div class="draft-card-head">
+              <div>
+                <div class="draft-card-title">#${draft.id} • ${escapeHtml(formatMediaType(draft.mediaType))}</div>
+                <div class="draft-card-meta">${escapeHtml(formatDateTime(draft.createdAt))}</div>
+              </div>
+              <button class="btn xs${isActive ? ' primary' : ''}" data-action="draft-use" data-id="${draft.id}">
+                ${isActive ? 'Collegata' : 'Usa'}
+              </button>
+            </div>
+            ${mediaPreview}
+            <div class="draft-card-text">${escapeHtml(previewText)}</div>
+            ${fileMeta}
+          </article>
+        `;
+      }).join('') || '<div class="draft-empty">Nessuna bozza per la ricerca corrente.</div>';
+
+      const hasSelectedDraft = selectedDraftValue && state.drafts.some((draft) => String(draft.id) === selectedDraftValue);
+      els.postDraft.value = hasSelectedDraft ? selectedDraftValue : '';
+      if (selectedDraftValue && !hasSelectedDraft) {
+        updatePostChecklist();
+      }
+    }
+
+    function renderPostsByCompany(posts) {
+      const selectedCompanyId = Number(state.postsCompanyFilter || 0);
+      const availableCompanies = selectedCompanyId
+        ? state.companies.filter((company) => Number(company.id) === selectedCompanyId)
+        : state.companies;
+
+      const cards = availableCompanies.map((company) => {
+        const companyPosts = posts.filter((post) => Number(post.companyId) === Number(company.id));
+        if (!companyPosts.length) return '';
+        const previewItems = companyPosts.slice(0, 4).map((post) => {
+          const status = getPostStatus(post);
+          const content = summarizePostContent(post);
+          return `
+            <div class="company-post-item">
+              <div class="company-post-item-head">
+                <div>#${post.id} • ${escapeHtml(status.label)}</div>
+                <div class="muted">${escapeHtml(post.startDate)} → ${escapeHtml(post.endDate)}</div>
+              </div>
+              <div class="company-post-item-text">${escapeHtml(content.label)} • ${escapeHtml(shorten(content.preview, 90))}</div>
+              <div class="row">
+                <button class="btn xs" type="button" data-action="post-edit" data-id="${post.id}">Modifica</button>
+                <button class="btn xs ghost" type="button" data-action="post-publish" data-id="${post.id}">Pubblica</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+        const extra = companyPosts.length > 4
+          ? `<div class="company-post-meta">+${companyPosts.length - 4} post non mostrati</div>`
+          : '';
+        const filterButton = selectedCompanyId
+          ? '<button class="btn xs ghost" type="button" data-action="posts-clear-filter">Mostra tutte</button>'
+          : `<button class="btn xs ghost" type="button" data-action="posts-filter-company" data-id="${company.id}">Solo questa</button>`;
+        return `
+          <article class="company-post-card">
+            <div class="company-post-head">
+              <h4 class="company-post-title">${escapeHtml(company.name)}</h4>
+              <div class="row">
+                <span class="company-post-meta">${companyPosts.length} post</span>
+                ${filterButton}
+              </div>
+            </div>
+            <div class="company-post-items">
+              ${previewItems}
+            </div>
+            ${extra}
+          </article>
+        `;
+      }).filter(Boolean);
+
+      const emptyMessage = selectedCompanyId
+        ? 'Nessun post per l\'azienda selezionata.'
+        : 'Nessun post da mostrare per le aziende attive.';
+      els.postsByCompanyList.innerHTML = cards.join('') || `<div class="posts-empty">${emptyMessage}</div>`;
+    }
+
+    function renderPosts() {
+      const visiblePosts = getFilteredPosts();
+      renderPostsByCompany(visiblePosts);
+
+      els.postsTable.innerHTML = visiblePosts.map((post) => {
+        const period = `${post.startDate} → ${post.endDate}`;
+        const content = summarizePostContent(post);
+        const status = getPostStatus(post);
+        const activePill = `<span class="pill ${status.className}">${status.label}</span>`;
+        return `
+          <tr>
+            <td>#${post.id}</td>
+            <td>
+              <div>${escapeHtml(post.companyName || '-')}</div>
+              <div class="muted">${activePill}</div>
+            </td>
+            <td>
+              <div>${escapeHtml(content.label)}</div>
+              <div class="muted">${escapeHtml(shorten(content.preview, 56))}</div>
+            </td>
+            <td>${escapeHtml(period)}</td>
+            <td>
+              <div class="row">
+                <button class="btn xs" data-action="post-edit" data-id="${post.id}">Modifica</button>
+                <button class="btn xs" data-action="post-duplicate" data-id="${post.id}">Duplica</button>
+                <button class="btn xs" data-action="post-publish" data-id="${post.id}">Pubblica</button>
+                <button class="btn xs ghost" data-action="post-renew" data-id="${post.id}">Rinnova +30g</button>
+                <button class="btn xs ghost" data-action="post-delete" data-id="${post.id}">Elimina</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('') || '<tr><td colspan="5" class="muted">Nessun post presente.</td></tr>';
+    }
+
+    function renderSchedule() {
+      els.scheduleTable.innerHTML = state.scheduleItems.map((item) => {
+        const status = item.status || 'pending';
+        const statusClass = status === 'sent' ? 'success' : status === 'failed' ? 'failed' : 'pending';
+        const statusLabel = translateDeliveryStatus(status);
+        const time = item.scheduledAt ? new Date(item.scheduledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-';
+        const postLabel = `${item.companyName || ''}`;
+        const summary = item.postText || formatMediaType(item.draftMediaType) || '';
+        return `
+          <tr>
+            <td>${escapeHtml(time)}</td>
+            <td>
+              <div>${escapeHtml(postLabel)}</div>
+              <div class="muted">${escapeHtml(shorten(summary, 36))}</div>
+            </td>
+            <td><span class="pill ${statusClass}">${escapeHtml(statusLabel)}</span></td>
+          </tr>
+        `;
+      }).join('') || '<tr><td colspan="3" class="muted">Nessuna pianificazione per questo giorno.</td></tr>';
+    }
+
+    function renderLogs() {
+      els.logsTable.innerHTML = state.logs.map((log) => {
+        const statusClass = log.status === 'sent' ? 'success' : log.status === 'failed' ? 'failed' : 'pending';
+        const statusLabel = translateDeliveryStatus(log.status || '');
+        return `
+          <tr>
+            <td>${formatDateTime(log.createdAt || log.date)}</td>
+            <td>${escapeHtml(log.companyName || '-')}</td>
+            <td><span class="pill ${statusClass}">${escapeHtml(statusLabel)}</span></td>
+            <td>${escapeHtml(shorten(log.error || log.postText || log.draftCaption || '', 80))}</td>
+          </tr>
+        `;
+      }).join('') || '<tr><td colspan="4" class="muted">Nessun log disponibile.</td></tr>';
+    }
+
+    function renderAll() {
+      renderSettings();
+      renderSchedulerForecast();
+      renderCompanies();
+      renderDrafts();
+      renderPosts();
+      renderSchedule();
+      renderLogs();
+      updateSummary();
+      updatePostChecklist();
+    }
+
+    function updateSummary() {
+      const today = new Date().toISOString().slice(0, 10);
+      const activePosts = state.posts.filter((post) => isPostActiveNow(post, today)).length;
+      const logsToday = state.logs.filter((log) => (log.date || '').startsWith(today)).length;
+      els.statCompanies.textContent = state.companies.length;
+      els.statActivePosts.textContent = activePosts;
+      els.statDrafts.textContent = state.drafts.length;
+      els.statSchedule.textContent = state.scheduleItems.length;
+      els.statLogs.textContent = logsToday;
+    }
+
+    function isPostActiveNow(post, today) {
+      if (!post || Number(post.active) !== 1) return false;
+      if (isValidDateString(post.endDate) && post.endDate < today) return false;
+      if (isValidDateString(post.startDate) && post.startDate > today) return false;
+      return true;
+    }
+
+    function getPostStatus(post) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (!post || Number(post.active) !== 1) return { label: 'In pausa', className: 'paused' };
+      if (isValidDateString(post.endDate) && post.endDate < today) {
+        return { label: 'Scaduto', className: 'expired' };
+      }
+      if (isValidDateString(post.startDate) && post.startDate > today) {
+        return { label: 'Programmato', className: 'scheduled' };
+      }
+      return { label: 'Attivo', className: 'success' };
+    }
+
+    function clearCompanyForm() {
+      state.companyEditId = null;
+      els.companyName.value = '';
+      els.companyPreferredTime.value = '';
+      els.companyTelegramId.value = '';
+      els.companyTelegramUrl.value = '';
+    }
+
+    function clearPostForm() {
+      state.postEditId = null;
+      els.postCompany.value = '';
+      els.postStartDate.value = '';
+      els.postEndDate.value = '';
+      els.postDraft.value = '';
+      els.postActive.checked = true;
+      els.postText.value = '';
+      refreshCustomSelect(els.postCompany);
+      renderDrafts();
+      updatePostChecklist();
+      clearPostFormDraft();
+    }
+
+    function fillPostForm(post) {
+      state.postEditId = post.id;
+      els.postCompany.value = String(post.companyId || '');
+      els.postStartDate.value = post.startDate || '';
+      els.postEndDate.value = post.endDate || '';
+      els.postDraft.value = post.draftId ? String(post.draftId) : '';
+      els.postActive.checked = Number(post.active) === 1;
+      els.postText.value = post.text || '';
+      refreshCustomSelect(els.postCompany);
+      renderDrafts();
+      updatePostChecklist();
+      clearPostFormDraft();
+    }
+
+    function duplicatePostToForm(post) {
+      if (!post) return;
+      state.postEditId = null;
+      els.postCompany.value = String(post.companyId || '');
+      els.postStartDate.value = post.startDate || '';
+      els.postEndDate.value = post.endDate || '';
+      els.postDraft.value = post.draftId ? String(post.draftId) : '';
+      els.postActive.checked = Number(post.active) === 1;
+      els.postText.value = post.text || '';
+      refreshCustomSelect(els.postCompany);
+      renderDrafts();
+      updatePostChecklist();
+      schedulePostDraftSave();
+    }
+    async function saveSettings() {
+      try {
+        const payload = {
+          scheduleEnabled: els.scheduleEnabled.checked ? 1 : 0,
+          scheduleTime: els.scheduleTime.value,
+          runtimeEndTime: els.runtimeEndTime.value,
+          minIntervalMinutes: Number(els.minIntervalMinutes.value || 0),
+          rotationGapMinutes: Number(els.rotationGapMinutes.value || 0)
+        };
+        await fetchJson('/settings', {
+          method: 'PUT',
+          body: JSON.stringify(payload)
+        });
+        setStatus('Impostazioni salvate.', 'success');
+        await loadAll();
+      } catch (err) {
+        setStatus(err.message || 'Salvataggio impostazioni fallito.', 'error');
+      }
+    }
+
+    async function saveCompany() {
+      if (savingCompany) return;
+      const payload = {
+        name: els.companyName.value.trim(),
+        preferredTime: els.companyPreferredTime.value || null,
+        telegramChannelId: els.companyTelegramId.value.trim(),
+        telegramPublicUrl: els.companyTelegramUrl.value.trim()
+      };
+      if (!payload.name) {
+        setStatus('Il nome azienda è obbligatorio.', 'error');
+        return;
+      }
+      savingCompany = true;
+      els.saveCompanyBtn.disabled = true;
+      try {
+        if (state.companyEditId) {
+          await fetchJson(`/companies/${state.companyEditId}`, {
+            method: 'PUT',
+            body: JSON.stringify(payload)
+          });
+        } else {
+          await fetchJson('/companies', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+          });
+        }
+        clearCompanyForm();
+        await loadAll();
+        setStatus('Azienda salvata.', 'success');
+      } catch (err) {
+        setStatus(err.message || 'Salvataggio azienda fallito.', 'error');
+      } finally {
+        savingCompany = false;
+        els.saveCompanyBtn.disabled = false;
+      }
+    }
+
+    async function savePost() {
+      if (savingPost) return;
+      const payload = {
+        companyId: Number(els.postCompany.value || 0),
+        startDate: els.postStartDate.value,
+        endDate: els.postEndDate.value,
+        active: els.postActive.checked ? 1 : 0,
+        draftId: els.postDraft.value ? Number(els.postDraft.value) : null,
+        text: els.postText.value.trim()
+      };
+      const checks = getPostValidation();
+      if (!checks.hasCompany) {
+        setStatus('Seleziona un\'azienda.', 'error');
+        return;
+      }
+      if (!checks.hasDates) {
+        setStatus('Date di inizio e fine obbligatorie e valide.', 'error');
+        return;
+      }
+      if (!checks.hasContent) {
+        setStatus('Aggiungi un testo o collega una bozza.', 'error');
+        return;
+      }
+      savingPost = true;
+      els.savePostBtn.disabled = true;
+      try {
+        if (state.postEditId) {
+          await fetchJson(`/posts/${state.postEditId}`, {
+            method: 'PUT',
+            body: JSON.stringify(payload)
+          });
+        } else {
+          await fetchJson('/posts', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+          });
+        }
+        clearPostForm();
+        await loadAll();
+        setStatus('Post salvato.', 'success');
+      } catch (err) {
+        setStatus(err.message || 'Salvataggio post fallito.', 'error');
+      } finally {
+        savingPost = false;
+        els.savePostBtn.disabled = false;
+      }
+    }
+
+    async function runSchedule() {
+      try {
+        await fetchJson('/schedule/run', {
+          method: 'POST',
+          body: JSON.stringify({ date: state.scheduleDate })
+        });
+        setStatus('Pianificazione generata.', 'success');
+        await loadAll();
+      } catch (err) {
+        setStatus(err.message || 'Esecuzione pianificazione fallita.', 'error');
+      }
+    }
+
+    async function publishPost(id) {
+      try {
+        await fetchJson(`/posts/${id}/publish`, { method: 'POST' });
+        setStatus('Pubblicazione avviata.', 'success');
+        await loadAll();
+      } catch (err) {
+        setStatus(err.message || 'Pubblicazione fallita.', 'error');
+      }
+    }
+
+    async function renewPost(id) {
+      try {
+        await fetchJson(`/posts/${id}/renew`, { method: 'POST' });
+        setStatus('Post rinnovato per 30 giorni.', 'success');
+        await loadAll();
+      } catch (err) {
+        setStatus(err.message || 'Rinnovo fallito.', 'error');
+      }
+    }
+
+    async function deleteCompany(id) {
+      if (!confirm('Eliminare l\'azienda?')) return;
+      try {
+        await fetchJson(`/companies/${id}`, { method: 'DELETE' });
+        await loadAll();
+        setStatus('Azienda eliminata.', 'success');
+      } catch (err) {
+        setStatus(err.message || 'Eliminazione fallita.', 'error');
+      }
+    }
+
+    async function deletePost(id) {
+      if (!confirm('Eliminare il post?')) return;
+      try {
+        await fetchJson(`/posts/${id}`, { method: 'DELETE' });
+        await loadAll();
+        setStatus('Post eliminato.', 'success');
+      } catch (err) {
+        setStatus(err.message || 'Eliminazione fallita.', 'error');
+      }
+    }
+
+    async function syncDrafts() {
+      try {
+        const result = await fetchJson('/telegram/pull', { method: 'POST' });
+        setStatus(`Sincronizzazione bozze completata (${result.processed || 0}).`, 'success');
+        await loadAll();
+      } catch (err) {
+        setStatus(err.message || 'Sincronizzazione bozze fallita.', 'error');
+      }
+    }
+
+    function handleGlobalShortcuts(event) {
+      const modifier = event.ctrlKey || event.metaKey;
+      if (!modifier) return;
+      const active = document.activeElement;
+      if (event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        if (els.postComposerPanel.contains(active)) {
+          savePost();
+          return;
+        }
+        if (els.companiesPanel.contains(active)) {
+          saveCompany();
+          return;
+        }
+        saveSettings();
+        return;
+      }
+      if (event.key === 'Enter' && els.postComposerPanel.contains(active)) {
+        event.preventDefault();
+        savePost();
+      }
+    }
+
+    function setPostsCompanyFilter(companyId) {
+      const normalized = Number(companyId || 0);
+      const value = normalized > 0 ? String(normalized) : '';
+      state.postsCompanyFilter = value;
+      if (els.postsCompanyFilter.value !== value) {
+        els.postsCompanyFilter.value = value;
+      }
+      refreshCustomSelect(els.postsCompanyFilter);
+      renderPosts();
+    }
+
+    function handlePostAction(action, id) {
+      if (!action || !id) return;
+      const post = state.posts.find((item) => item.id === id);
+      if (action === 'post-edit' && post) {
+        fillPostForm(post);
+        setStatus(`Modifica post #${post.id}`, 'success');
+        focusPanel(els.postComposerPanel, els.postText);
+      }
+      if (action === 'post-duplicate' && post) {
+        duplicatePostToForm(post);
+        setStatus(`Post #${post.id} duplicato nel modulo. Salva per crearne uno nuovo.`, 'success');
+        focusPanel(els.postComposerPanel, els.postText);
+      }
+      if (action === 'post-delete') deletePost(id);
+      if (action === 'post-publish') publishPost(id);
+      if (action === 'post-renew') renewPost(id);
+    }
+
+    els.refreshBtn.addEventListener('click', loadAll);
+    els.runScheduleBtn.addEventListener('click', runSchedule);
+    els.resetPostBtn.addEventListener('click', () => {
+      clearPostForm();
+      focusPanel(els.postComposerPanel, els.postStartDate);
+    });
+    els.saveSettingsBtn.addEventListener('click', saveSettings);
+    els.saveCompanyBtn.addEventListener('click', saveCompany);
+    els.clearCompanyBtn.addEventListener('click', clearCompanyForm);
+    els.pullDraftsBtn.addEventListener('click', syncDrafts);
+    els.refreshDraftsBtn.addEventListener('click', loadAll);
+    els.savePostBtn.addEventListener('click', savePost);
+    els.clearPostBtn.addEventListener('click', () => {
+      clearPostForm();
+      focusPanel(els.postComposerPanel, els.postStartDate);
+    });
+    els.postsCompanyFilter.addEventListener('change', () => {
+      setPostsCompanyFilter(Number(els.postsCompanyFilter.value || 0));
+    });
+    els.clearPostsFilterBtn.addEventListener('click', () => {
+      setPostsCompanyFilter(0);
+    });
+    const scheduleForecastPreview = debounce(() => {
+      loadSchedulerForecast({ silent: true, useFormValues: true });
+    }, 260);
+
+    els.scheduleEnabled.addEventListener('change', () => {
+      els.scheduleEnabledLabel.textContent = els.scheduleEnabled.checked ? 'Attivo' : 'Disattivo';
+      scheduleForecastPreview();
+    });
+
+    [
+      els.scheduleTime,
+      els.runtimeEndTime,
+      els.minIntervalMinutes,
+      els.rotationGapMinutes
+    ].forEach((el) => {
+      if (!el) return;
+      el.addEventListener('change', scheduleForecastPreview);
+      el.addEventListener('input', scheduleForecastPreview);
+    });
+
+    els.scheduleDate.addEventListener('change', () => {
+      const value = els.scheduleDate.value.trim();
+      if (isValidDateString(value)) {
+        state.scheduleDate = value;
+        loadSchedule();
+      } else {
+        els.scheduleDate.value = state.scheduleDate;
+      }
+    });
+
+    [
+      els.postCompany,
+      els.postActive,
+      els.postStartDate,
+      els.postEndDate,
+      els.postDraft,
+      els.postText
+    ].forEach((el) => {
+      if (!el) return;
+      const onFormChange = () => {
+        updatePostChecklist();
+        schedulePostDraftSave();
+      };
+      el.addEventListener('change', onFormChange);
+      el.addEventListener('input', onFormChange);
+    });
+
+    els.postStartDate.addEventListener('change', () => {
+      maybeAutoAdjustPostEndDate();
+      schedulePostDraftSave();
+    });
+    els.postStartDate.addEventListener('blur', maybeAutoAdjustPostEndDate);
+
+    els.postPresetTodayBtn.addEventListener('click', () => applyPostDatePreset(0));
+    els.postPresetWeekBtn.addEventListener('click', () => applyPostDatePreset(7));
+    els.postPresetMonthBtn.addEventListener('click', () => applyPostDatePreset(30));
+    els.focusDraftsBtn.addEventListener('click', () => {
+      focusPanel(els.draftsPanel, els.draftSearch);
+    });
+
+    els.draftSearch.addEventListener('input', () => {
+      state.draftSearch = els.draftSearch.value || '';
+      renderDrafts();
+    });
+    els.useLatestDraftBtn.addEventListener('click', () => {
+      const query = String(state.draftSearch || '').trim().toLowerCase();
+      const latest = state.drafts.find((draft) => {
+        if (!query) return true;
+        const haystack = [
+          draft.id,
+          draft.mediaType,
+          draft.caption,
+          draft.text,
+          draft.fileName
+        ].map((part) => String(part || '').toLowerCase()).join(' ');
+        return haystack.includes(query);
+      });
+      if (!latest) {
+        setStatus('Nessuna bozza disponibile. Esegui prima la sincronizzazione.', 'error');
+        return;
+      }
+      useDraftInPostForm(latest);
+    });
+
+    els.companiesTable.addEventListener('click', (event) => {
+      const action = event.target?.dataset?.action;
+      const id = Number(event.target?.dataset?.id || 0);
+      if (!action || !id) return;
+      const company = state.companies.find((item) => item.id === id);
+      if (action === 'company-edit' && company) {
+        state.companyEditId = company.id;
+        els.companyName.value = company.name || '';
+        els.companyPreferredTime.value = company.preferredTime || '';
+        els.companyTelegramId.value = company.telegramChannelId || '';
+        els.companyTelegramUrl.value = company.telegramPublicUrl || '';
+        setStatus(`Modifica azienda #${company.id}`, 'success');
+        focusPanel(els.companiesPanel, els.companyName);
+      }
+      if (action === 'company-delete') deleteCompany(id);
+    });
+
+    els.draftsList.addEventListener('click', (event) => {
+      const action = event.target?.dataset?.action;
+      const id = Number(event.target?.dataset?.id || 0);
+      if (action !== 'draft-use' || !id) return;
+      const draft = state.drafts.find((item) => item.id === id);
+      if (!draft) return;
+      useDraftInPostForm(draft);
+    });
+
+    els.postsTable.addEventListener('click', (event) => {
+      const action = event.target?.dataset?.action;
+      const id = Number(event.target?.dataset?.id || 0);
+      handlePostAction(action, id);
+    });
+
+    els.postsByCompanyList.addEventListener('click', (event) => {
+      const action = event.target?.dataset?.action;
+      const id = Number(event.target?.dataset?.id || 0);
+      if (!action) return;
+      if (action === 'posts-filter-company' && id) {
+        setPostsCompanyFilter(id);
+        return;
+      }
+      if (action === 'posts-clear-filter') {
+        setPostsCompanyFilter(0);
+        return;
+      }
+      handlePostAction(action, id);
+    });
+
+    document.addEventListener('keydown', handleGlobalShortcuts);
+    window.addEventListener('beforeunload', (event) => {
+      savePostFormDraft();
+      if (state.postEditId) return;
+      if (!hasPostFormData(collectPostFormSnapshot())) return;
+      event.preventDefault();
+      event.returnValue = '';
+    });
+
+    document.querySelectorAll('.date-input').forEach(buildDatePicker);
+    document.querySelectorAll('.time-input').forEach(buildTimePicker);
+    els.scheduleDate.value = state.scheduleDate;
+    updatePostChecklist();
+    refreshCustomSelect(els.postCompany);
+    refreshCustomSelect(els.postsCompanyFilter);
+    loadAll().then(() => {
+      restorePostFormDraft();
+    }).catch(() => {});
+  </script>
+</body>
+</html>
+

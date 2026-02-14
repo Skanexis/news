@@ -194,14 +194,22 @@ function getSchedulerDefaults() {
 
 function getSchedulerSettings() {
  const scheduleTime = normalizeTime(getSetting('scheduleTime')) || getSchedulerDefaults();
+ const runtimeEndTime = normalizeTime(getSetting('runtimeEndTime')) || '23:00';
  const minIntervalMinutes = Number(getSetting('minIntervalMinutes') || 20);
+ const rotationGapMinutes = Number(getSetting('rotationGapMinutes') || 0);
  const enabledRaw = getSetting('scheduleEnabled');
  const enabled = enabledRaw === null ? true : enabledRaw !== '0';
  return {
   scheduleTime,
+  runtimeEndTime,
   minIntervalMinutes: Number.isFinite(minIntervalMinutes) && minIntervalMinutes > 0 ? Math.floor(minIntervalMinutes) : 20,
+  rotationGapMinutes: Number.isFinite(rotationGapMinutes) && rotationGapMinutes >= 0 ? Math.floor(rotationGapMinutes) : 0,
   enabled
  };
+}
+
+function hasNonEmptyValue(value) {
+ return String(value ?? '').trim() !== '';
 }
 
 async function telegramApi(method, payload = {}) {
@@ -354,21 +362,99 @@ function insertLog(post, status, error, trigger, dateOverride) {
   .run(post.id, post.platform, date, status, error || null, createdAt, trigger || 'schedule');
 }
 
-function generateDailySchedule(date, startFromNow = true) {
- const targetDate = date || new Date().toISOString().slice(0, 10);
- const settings = getSchedulerSettings();
- const posts = db.prepare(`
-  SELECT posts.*, 
+function getActiveTelegramPostsForDate(targetDate) {
+ return db.prepare(`
+  SELECT posts.*,
     companies.name as companyName,
     companies.telegramChannelId,
     companies.telegramPublicUrl,
-    companies.preferredTime
-    , links.code as linkCode
+    companies.preferredTime,
+    links.code as linkCode
    FROM posts
    JOIN companies ON posts.companyId = companies.id
    LEFT JOIN links ON posts.linkId = links.id
    WHERE posts.active=1 AND posts.startDate<=? AND posts.endDate>=? AND posts.platform = 'telegram'
  `).all(targetDate, targetDate);
+}
+
+function calculateScheduleForecast(date, posts, config) {
+ const perPostCounts = new Map(posts.map((post) => [post.id, 0]));
+ const startMinutes = timeToMinutes(config.scheduleTime);
+ const endMinutes = timeToMinutes(config.runtimeEndTime);
+ let totalPublications = 0;
+
+ if (posts.length && startMinutes !== null && endMinutes !== null && endMinutes >= startMinutes) {
+  let pointer = 0;
+  let currentMinutes = startMinutes;
+  while (currentMinutes <= endMinutes) {
+   const post = posts[pointer];
+   perPostCounts.set(post.id, (perPostCounts.get(post.id) || 0) + 1);
+   totalPublications += 1;
+   pointer += 1;
+   if (pointer >= posts.length) {
+    pointer = 0;
+    currentMinutes += config.minIntervalMinutes + config.rotationGapMinutes;
+   } else {
+    currentMinutes += config.minIntervalMinutes;
+   }
+  }
+ }
+
+ const perPost = posts.map((post) => ({
+  postId: post.id,
+  companyName: post.companyName || null,
+  publishCount: perPostCounts.get(post.id) || 0
+ }));
+
+ const distributionMap = new Map();
+ for (const row of perPost) {
+  distributionMap.set(row.publishCount, (distributionMap.get(row.publishCount) || 0) + 1);
+ }
+ const publishDistribution = Array.from(distributionMap.entries())
+  .map(([publishCount, postCount]) => ({ publishCount, postCount }))
+  .sort((a, b) => b.publishCount - a.publishCount);
+
+ const fullRotations = posts.length ? Math.floor(totalPublications / posts.length) : 0;
+ const partialPublications = posts.length ? totalPublications % posts.length : 0;
+
+ const suggestions = posts.length ? {
+  overall: {
+   scheduleTime: config.scheduleTime,
+   runtimeEndTime: config.runtimeEndTime,
+   minIntervalMinutes: config.minIntervalMinutes,
+   rotationGapMinutes: config.rotationGapMinutes,
+   expectedPublications: totalPublications,
+   expectedFullRotations: fullRotations
+  }
+ } : {};
+
+ return {
+  date,
+  config: {
+   scheduleTime: config.scheduleTime,
+   runtimeEndTime: config.runtimeEndTime,
+   minIntervalMinutes: config.minIntervalMinutes,
+   rotationGapMinutes: config.rotationGapMinutes
+  },
+  totals: {
+   windowStartTime: config.scheduleTime,
+   windowEndTime: config.runtimeEndTime,
+   activePosts: posts.length,
+   totalPublications,
+   fullRotations,
+   partialPublications,
+   equalRotations: posts.length ? partialPublications === 0 : true
+  },
+  perPost,
+  publishDistribution,
+  suggestions
+ };
+}
+
+function generateDailySchedule(date, startFromNow = true) {
+ const targetDate = date || new Date().toISOString().slice(0, 10);
+ const settings = getSchedulerSettings();
+ const posts = getActiveTelegramPostsForDate(targetDate);
 
  if (!posts.length) return { date: targetDate, total: 0, scheduled: 0 };
 
@@ -649,23 +735,45 @@ app.get('/settings', (_, res) => {
  res.send({
   scheduleEnabled: settings.enabled ? 1 : 0,
   scheduleTime: settings.scheduleTime,
-  minIntervalMinutes: settings.minIntervalMinutes
+  runtimeEndTime: settings.runtimeEndTime,
+  minIntervalMinutes: settings.minIntervalMinutes,
+  rotationGapMinutes: settings.rotationGapMinutes
  });
 });
 
 app.put('/settings', (req, res) => {
+ const currentSettings = getSchedulerSettings();
  const scheduleEnabled = req.body?.scheduleEnabled;
  const scheduleTime = normalizeTime(req.body?.scheduleTime);
+ const runtimeEndTimeInput = req.body?.runtimeEndTime;
+ const runtimeEndTime = hasNonEmptyValue(runtimeEndTimeInput)
+  ? normalizeTime(runtimeEndTimeInput)
+  : currentSettings.runtimeEndTime;
  const minIntervalMinutesRaw = Number(req.body?.minIntervalMinutes);
+ const rotationGapInput = req.body?.rotationGapMinutes;
+ const rotationGapMinutesRaw = hasNonEmptyValue(rotationGapInput)
+  ? Number(rotationGapInput)
+  : currentSettings.rotationGapMinutes;
 
  if (scheduleTime === null) return badRequest(res, 'Invalid schedule time');
+ if (runtimeEndTime === null) return badRequest(res, 'Invalid runtime end time');
+ const scheduleStartMinutes = timeToMinutes(scheduleTime);
+ const scheduleEndMinutes = timeToMinutes(runtimeEndTime);
+ if (scheduleStartMinutes === null || scheduleEndMinutes === null || scheduleEndMinutes < scheduleStartMinutes) {
+  return badRequest(res, 'Runtime end time must be after start time');
+ }
  if (!Number.isFinite(minIntervalMinutesRaw) || minIntervalMinutesRaw < 1) {
   return badRequest(res, 'Invalid min interval');
+ }
+ if (!Number.isFinite(rotationGapMinutesRaw) || rotationGapMinutesRaw < 0) {
+  return badRequest(res, 'Invalid rotation gap');
  }
 
  setSetting('scheduleEnabled', scheduleEnabled === 0 || scheduleEnabled === false || scheduleEnabled === '0' ? '0' : '1');
  setSetting('scheduleTime', scheduleTime);
+ setSetting('runtimeEndTime', runtimeEndTime);
  setSetting('minIntervalMinutes', String(Math.floor(minIntervalMinutesRaw)));
+ setSetting('rotationGapMinutes', String(Math.floor(rotationGapMinutesRaw)));
 
  configureScheduleJob();
  res.send({ ok: true });
@@ -928,6 +1036,52 @@ app.post('/schedule/run', async (req, res) => {
  } catch (e) {
   res.status(500).send({ ok: false, error: e.message });
  }
+});
+
+app.get('/schedule/forecast', (req, res) => {
+ const date = req.query?.date;
+ if (date && !isValidDateString(date)) return badRequest(res, 'Invalid date format');
+ const targetDate = date || new Date().toISOString().slice(0, 10);
+ const settings = getSchedulerSettings();
+
+ const startTimeRaw = req.query?.startTime;
+ const endTimeRaw = req.query?.endTime;
+ const minIntervalRaw = req.query?.minIntervalMinutes;
+ const rotationGapRaw = req.query?.rotationGapMinutes;
+
+ const hasStartTime = hasNonEmptyValue(startTimeRaw);
+ const hasEndTime = hasNonEmptyValue(endTimeRaw);
+ const hasMinInterval = hasNonEmptyValue(minIntervalRaw);
+ const hasRotationGap = hasNonEmptyValue(rotationGapRaw);
+
+ const scheduleTime = hasStartTime ? normalizeTime(startTimeRaw) : settings.scheduleTime;
+ const runtimeEndTime = hasEndTime ? normalizeTime(endTimeRaw) : settings.runtimeEndTime;
+ const minIntervalMinutes = hasMinInterval ? Number(minIntervalRaw) : settings.minIntervalMinutes;
+ const rotationGapMinutes = hasRotationGap ? Number(rotationGapRaw) : settings.rotationGapMinutes;
+
+ if (hasStartTime && scheduleTime === null) return badRequest(res, 'Invalid start time');
+ if (hasEndTime && runtimeEndTime === null) return badRequest(res, 'Invalid end time');
+ if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 1) {
+  return badRequest(res, 'Invalid min interval');
+ }
+ if (!Number.isFinite(rotationGapMinutes) || rotationGapMinutes < 0) {
+  return badRequest(res, 'Invalid rotation gap');
+ }
+
+ const scheduleStartMinutes = timeToMinutes(scheduleTime);
+ const scheduleEndMinutes = timeToMinutes(runtimeEndTime);
+ if (scheduleStartMinutes === null || scheduleEndMinutes === null || scheduleEndMinutes < scheduleStartMinutes) {
+  return badRequest(res, 'Runtime end time must be after start time');
+ }
+
+ const forecastConfig = {
+  scheduleTime,
+  runtimeEndTime,
+  minIntervalMinutes: Math.floor(minIntervalMinutes),
+  rotationGapMinutes: Math.floor(rotationGapMinutes)
+ };
+ const posts = getActiveTelegramPostsForDate(targetDate);
+ res.send(calculateScheduleForecast(targetDate, posts, forecastConfig));
 });
 
 app.get('/schedule/items', (req, res) => {

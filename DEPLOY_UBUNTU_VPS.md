@@ -90,15 +90,15 @@ nano .env
 Минимально заполните:
 
 ```env
-TELEGRAM_BOT_TOKEN=...
+TELEGRAM_BOT_TOKEN=@8374815692:AAFW_3HQDDpLdZTClo9hirThx3yjohgF568
 TELEGRAM_CHANNEL_ID=@channel_or_chat_id
 TELEGRAM_WEBHOOK_SECRET=long_random_secret
-PUBLIC_BASE_URL=https://your-domain.com
+PUBLIC_BASE_URL=https://admin.yosupport.it
 CRON_TIME=0 9 * * *
 CRON_TZ=Europe/Moscow
 ANALYTICS_SALT=long_random_salt
 PORT=3000
-CORS_ORIGIN=https://your-domain.com
+CORS_ORIGIN=https://admin.yosupport.it
 ENABLE_SECURITY_HEADERS=1
 ```
 
@@ -274,7 +274,7 @@ curl -I https://your-domain.com
 Если используете webhook, настройте его:
 
 ```bash
-curl -sS "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
+curl -sS "https://api.telegram.org/bot<>/setWebhook" \
   -H "Content-Type: application/json" \
   -d '{"url":"https://your-domain.com/telegram/webhook","secret_token":"<WEBHOOK_SECRET>","allowed_updates":["message","channel_post"]}'
 ```

@@ -251,8 +251,8 @@ async function handleTelegramMessage(message) {
  if (!message || !message.chat || !message.message_id) return;
  const chatId = String(message.chat.id);
  const messageId = message.message_id;
- const text = message.text || null;
- const caption = message.caption || null;
+ const text = normalizeText(message.text);
+ const caption = normalizeText(message.caption);
  let mediaType = 'text';
  let fileId = null;
  let fileUniqueId = null;
@@ -277,6 +277,9 @@ async function handleTelegramMessage(message) {
   fileName = message.document.file_name || null;
   mimeType = message.document.mime_type || null;
  }
+
+ // Ignore service/empty updates (no text, no caption, no supported media).
+ if (!text && !caption && !fileId) return null;
 
  const createdAt = new Date((message.date || Math.floor(Date.now() / 1000)) * 1000).toISOString();
  const existing = db.prepare('SELECT id, filePath FROM drafts WHERE chatId = ? AND messageId = ?')
@@ -592,7 +595,7 @@ async function publishPostNow(postId) {
    companies.name as companyName,
    companies.telegramChannelId,
    companies.telegramPublicUrl,
-   , links.code as linkCode
+   links.code as linkCode
   FROM posts
   JOIN companies ON posts.companyId = companies.id
   LEFT JOIN links ON posts.linkId = links.id

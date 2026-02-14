@@ -238,6 +238,71 @@
       justify-content: center;
     }
 
+    .auth-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 22px;
+      background: rgba(4, 8, 18, 0.82);
+      backdrop-filter: blur(6px);
+    }
+
+    .auth-overlay[hidden] {
+      display: none;
+    }
+
+    .auth-card {
+      width: min(420px, 94vw);
+      background: rgba(10, 15, 30, 0.98);
+      border: 1px solid rgba(79, 111, 220, 0.35);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 28px 70px rgba(2, 6, 20, 0.65);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .auth-card h3 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: -0.01em;
+    }
+
+    .auth-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .auth-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .auth-actions .btn {
+      flex: 1;
+      min-width: 120px;
+    }
+
+    .auth-message {
+      min-height: 18px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .auth-message.error {
+      color: var(--danger);
+    }
+
+    .auth-message.success {
+      color: var(--success);
+    }
+
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -1653,6 +1718,26 @@
   <div class="bg-orb orb-c"></div>
   <div class="grid-glow"></div>
 
+  <div id="authOverlay" class="auth-overlay" hidden>
+    <form id="authForm" class="auth-card">
+      <h3>Accesso API</h3>
+      <p>Inserisci login e password Basic Auth configurati in Nginx.</p>
+      <label class="field">
+        <span>Username</span>
+        <input type="text" id="authUsername" autocomplete="username" placeholder="admin">
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" id="authPassword" autocomplete="current-password" placeholder="********">
+      </label>
+      <div class="auth-actions">
+        <button class="btn primary" id="authSubmitBtn" type="submit">Accedi</button>
+        <button class="btn ghost" id="authResetBtn" type="button">Cancella salvate</button>
+      </div>
+      <div id="authMessage" class="auth-message"></div>
+    </form>
+  </div>
+
   <div class="app-shell">
     <header class="topbar">
       <div class="brand">
@@ -1664,6 +1749,7 @@
       </div>
       <div class="top-actions">
         <div id="status" class="status">Pronto.</div>
+        <button class="btn ghost" id="authBtn" type="button">Accesso API</button>
         <button class="btn ghost" id="refreshBtn">Aggiorna</button>
         <button class="btn primary" id="runScheduleBtn">Esegui Pianificazione</button>
         <button class="btn ghost" id="resetPostBtn">Nuovo Post</button>
@@ -1999,13 +2085,24 @@
     const POST_DRAFT_STORAGE_KEY = 'yosupport_post_form_draft_v1';
     const POST_DRAFT_STORAGE_VERSION = 1;
     const POST_DRAFT_DEBOUNCE_MS = 250;
+    const API_AUTH_STORAGE_KEY = 'yosupport_api_basic_auth_v1';
     let postDraftRestoreDone = false;
     let savingPost = false;
     let savingCompany = false;
+    let apiAuthToken = loadApiAuthToken();
+    let authInProgress = false;
 
     const byId = (id) => document.getElementById(id);
 
     const els = {
+      authOverlay: byId('authOverlay'),
+      authForm: byId('authForm'),
+      authUsername: byId('authUsername'),
+      authPassword: byId('authPassword'),
+      authSubmitBtn: byId('authSubmitBtn'),
+      authResetBtn: byId('authResetBtn'),
+      authMessage: byId('authMessage'),
+      authBtn: byId('authBtn'),
       refreshBtn: byId('refreshBtn'),
       runScheduleBtn: byId('runScheduleBtn'),
       resetPostBtn: byId('resetPostBtn'),
@@ -2063,6 +2160,116 @@
     function setStatus(message, type) {
       els.status.textContent = message;
       els.status.className = `status${type ? ' ' + type : ''}`;
+    }
+
+    function loadApiAuthToken() {
+      try {
+        return String(localStorage.getItem(API_AUTH_STORAGE_KEY) || '').trim();
+      } catch (err) {
+        return '';
+      }
+    }
+
+    function saveApiAuthToken(token) {
+      try {
+        if (token) {
+          localStorage.setItem(API_AUTH_STORAGE_KEY, token);
+        } else {
+          localStorage.removeItem(API_AUTH_STORAGE_KEY);
+        }
+      } catch (err) {}
+    }
+
+    function encodeBasicAuth(username, password) {
+      try {
+        return btoa(`${username}:${password}`);
+      } catch (err) {
+        return '';
+      }
+    }
+
+    function setAuthMessage(message, type) {
+      if (!els.authMessage) return;
+      els.authMessage.textContent = message || '';
+      els.authMessage.className = `auth-message${type ? ' ' + type : ''}`;
+    }
+
+    function syncAuthButton() {
+      if (!els.authBtn) return;
+      els.authBtn.textContent = apiAuthToken ? 'Cambia Accesso API' : 'Accesso API';
+    }
+
+    function openAuthOverlay(message) {
+      if (!els.authOverlay) return;
+      if (message) setAuthMessage(message, 'error');
+      els.authOverlay.hidden = false;
+      if (els.authUsername && !els.authUsername.value.trim()) {
+        els.authUsername.focus();
+      } else if (els.authPassword) {
+        els.authPassword.focus();
+      }
+    }
+
+    function closeAuthOverlay() {
+      if (!els.authOverlay) return;
+      els.authOverlay.hidden = true;
+      if (els.authPassword) els.authPassword.value = '';
+      setAuthMessage('', '');
+    }
+
+    async function verifyApiAuthToken(token) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = `Basic ${token}`;
+      const response = await fetch(`${API}/health`, { headers });
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Credenziali non valide.');
+        }
+        throw new Error(`Verifica accesso fallita (${response.status}).`);
+      }
+    }
+
+    async function submitApiAuth(event) {
+      event.preventDefault();
+      if (authInProgress) return;
+      const username = String(els.authUsername?.value || '').trim();
+      const password = String(els.authPassword?.value || '');
+      if (!username || !password) {
+        setAuthMessage('Inserisci username e password.', 'error');
+        return;
+      }
+      const token = encodeBasicAuth(username, password);
+      if (!token) {
+        setAuthMessage('Codifica credenziali fallita.', 'error');
+        return;
+      }
+
+      authInProgress = true;
+      if (els.authSubmitBtn) els.authSubmitBtn.disabled = true;
+      setAuthMessage('Verifica credenziali...', '');
+      try {
+        await verifyApiAuthToken(token);
+        apiAuthToken = token;
+        saveApiAuthToken(token);
+        syncAuthButton();
+        closeAuthOverlay();
+        setStatus('Autorizzazione API completata.', 'success');
+        await loadAll();
+      } catch (err) {
+        setAuthMessage(err.message || 'Accesso fallito.', 'error');
+      } finally {
+        authInProgress = false;
+        if (els.authSubmitBtn) els.authSubmitBtn.disabled = false;
+      }
+    }
+
+    function clearSavedApiAuth() {
+      apiAuthToken = '';
+      saveApiAuthToken('');
+      syncAuthButton();
+      setAuthMessage('Credenziali salvate rimosse.', 'success');
+      if (els.authPassword) els.authPassword.value = '';
+      if (els.authUsername) els.authUsername.focus();
     }
 
     function escapeHtml(value) {
@@ -2799,12 +3006,26 @@
     }
 
     async function fetchJson(path, options) {
-      const response = await fetch(`${API}${path}`, {
-        headers: { 'Content-Type': 'application/json' },
-        ...options
-      });
+      const requestHeaders = {
+        'Content-Type': 'application/json',
+        ...(options?.headers || {})
+      };
+      if (apiAuthToken && !requestHeaders.Authorization) {
+        requestHeaders.Authorization = `Basic ${apiAuthToken}`;
+      }
+      const requestOptions = {
+        ...(options || {}),
+        headers: requestHeaders
+      };
+      const response = await fetch(`${API}${path}`, requestOptions);
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
+        if (response.status === 401) {
+          openAuthOverlay('API richiede autorizzazione. Inserisci credenziali Nginx.');
+          const unauthorizedError = new Error('Autorizzazione richiesta.');
+          unauthorizedError.status = 401;
+          throw unauthorizedError;
+        }
         throw new Error(data.error || 'Richiesta fallita');
       }
       return data;
@@ -2904,6 +3125,10 @@
         renderAll();
         setStatus('Aggiornato.', 'success');
       } catch (err) {
+        if (Number(err?.status) === 401) {
+          setStatus('Accesso API richiesto. Usa username/password Nginx.', 'error');
+          return;
+        }
         setStatus(err.message || 'Caricamento dati fallito.', 'error');
       }
     }
@@ -3566,6 +3791,9 @@
     }
 
     els.refreshBtn.addEventListener('click', loadAll);
+    els.authBtn.addEventListener('click', () => openAuthOverlay('Inserisci credenziali API.'));
+    els.authForm.addEventListener('submit', submitApiAuth);
+    els.authResetBtn.addEventListener('click', clearSavedApiAuth);
     els.runScheduleBtn.addEventListener('click', runSchedule);
     els.resetPostBtn.addEventListener('click', () => {
       clearPostForm();
@@ -3729,6 +3957,7 @@
 
     document.querySelectorAll('.date-input').forEach(buildDatePicker);
     document.querySelectorAll('.time-input').forEach(buildTimePicker);
+    syncAuthButton();
     els.scheduleDate.value = state.scheduleDate;
     updatePostChecklist();
     refreshCustomSelect(els.postCompany);

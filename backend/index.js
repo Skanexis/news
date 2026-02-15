@@ -1507,4 +1507,4 @@ app.get('/logs', (_, res) => res.send(db.prepare(`
  ORDER BY logs.id DESC
 `).all()));
 
-app.listen(3000, () => console.log('Backend v7 running'));
+app.listen(3000, () => console.log('Back is up!'));

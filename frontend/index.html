@@ -1190,20 +1190,42 @@
 
     .posts-toolbar {
       display: grid;
-      grid-template-columns: repeat(2, minmax(180px, 1fr)) auto;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
       gap: 10px;
       align-items: end;
+    }
+
+    .toolbar-sticky {
+      position: sticky;
+      top: 10px;
+      z-index: 70;
+      border: 1px solid rgba(124, 136, 179, 0.22);
+      border-radius: var(--radius-sm);
+      background: rgba(8, 12, 26, 0.72);
+      backdrop-filter: blur(6px);
+      padding: 10px;
     }
 
     .posts-toolbar .field {
       margin: 0;
     }
 
-    .companies-toolbar {
-      grid-template-columns: minmax(220px, 1fr);
+    .posts-toolbar .toolbar-action {
+      align-self: end;
+      white-space: nowrap;
     }
 
-    .posts-toolbar input {
+    .companies-toolbar {
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+
+    .runtime-toolbar {
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      margin-bottom: 10px;
+    }
+
+    .posts-toolbar input,
+    .posts-toolbar select {
       width: 100%;
     }
 
@@ -1309,6 +1331,13 @@
       white-space: pre-wrap;
     }
 
+    .company-post-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+
     .posts-empty {
       border: 1px dashed rgba(124, 136, 179, 0.35);
       border-radius: var(--radius-sm);
@@ -1317,6 +1346,64 @@
       color: var(--muted);
       text-align: center;
       background: rgba(8, 12, 26, 0.4);
+    }
+
+    body[data-density="compact"] .panel {
+      padding: 15px;
+      gap: 12px;
+    }
+
+    body[data-density="compact"] .btn {
+      padding: 8px 14px;
+      font-size: 13px;
+    }
+
+    body[data-density="compact"] .btn.xs {
+      padding: 5px 10px;
+      font-size: 11px;
+    }
+
+    body[data-density="compact"] th,
+    body[data-density="compact"] td {
+      padding: 8px 9px;
+      font-size: 12px;
+    }
+
+    body[data-density="compact"] .pill {
+      padding: 4px 9px;
+      font-size: 11px;
+    }
+
+    body[data-density="compact"] .company-post-item {
+      padding: 6px 8px;
+    }
+
+    body[data-density="compact"] .runtime-summary-item {
+      padding: 6px 7px;
+    }
+
+    .runtime-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .runtime-summary-item {
+      border: 1px solid rgba(124, 136, 179, 0.25);
+      border-radius: 9px;
+      padding: 8px;
+      background: rgba(8, 12, 26, 0.45);
+      display: grid;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .runtime-summary-item strong {
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.1;
     }
 
     .choice-row {
@@ -1702,6 +1789,18 @@
       .posts-toolbar {
         grid-template-columns: 1fr;
       }
+      .toolbar-sticky {
+        position: static;
+        top: auto;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        backdrop-filter: none;
+      }
+      .runtime-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
       .forecast-grid {
         grid-template-columns: 1fr;
       }
@@ -1754,6 +1853,9 @@
       .stats-grid {
         grid-template-columns: 1fr;
       }
+      .runtime-summary {
+        grid-template-columns: 1fr;
+      }
       table { min-width: 480px; }
     }
   </style>
@@ -1796,6 +1898,7 @@
       <div class="top-actions">
         <div id="status" class="status">Pronto.</div>
         <button class="btn ghost" id="authBtn" type="button">Accesso API</button>
+        <button class="btn ghost" id="densityToggleBtn" type="button">Vista: Standard</button>
         <button class="btn ghost" id="refreshBtn">Aggiorna</button>
         <button class="btn primary" id="runScheduleBtn">Esegui Pianificazione</button>
         <button class="btn ghost" id="resetPostBtn">Nuovo Post</button>
@@ -1901,10 +2004,27 @@
             <button class="btn primary" id="saveCompanyBtn">Salva Azienda</button>
             <button class="btn ghost" id="clearCompanyBtn">Pulisci</button>
           </div>
-          <div class="posts-toolbar companies-toolbar">
+          <div class="posts-toolbar companies-toolbar toolbar-sticky">
             <label class="field">
               <span>Cerca azienda</span>
               <input type="text" id="companiesSearch" placeholder="Nome, ID, orario...">
+            </label>
+            <label class="field">
+              <span>Tipo</span>
+              <select id="companiesTypeFilter" class="native-select">
+                <option value="">Tutti</option>
+                <option value="premium">Solo Premium</option>
+                <option value="standard">Solo Standard</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Righe per pagina</span>
+              <select id="companiesPageSize" class="native-select">
+                <option value="12">12</option>
+                <option value="24">24</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
             </label>
           </div>
           <div class="table-wrap">
@@ -2019,21 +2139,40 @@
     <section class="section">
       <div class="section-title">Operativita</div>
       <div class="grid">
-        <div class="panel span-7">
+        <div class="panel span-7" id="postsPanel">
           <div class="panel-head">
             <h3>Post</h3>
             <p>Gestisci campagne e azioni rapide.</p>
           </div>
-          <div class="posts-toolbar">
+          <div class="posts-toolbar toolbar-sticky">
             <label class="field">
               <span>Filtro azienda</span>
               <select id="postsCompanyFilter" class="native-select" data-search="true"></select>
             </label>
             <label class="field">
+              <span>Stato post</span>
+              <select id="postsStatusFilter" class="native-select">
+                <option value="">Tutti</option>
+                <option value="active">Attivi</option>
+                <option value="upcoming">Programmato</option>
+                <option value="paused">In pausa</option>
+                <option value="expired">Scaduto</option>
+              </select>
+            </label>
+            <label class="field">
               <span>Cerca post</span>
               <input type="text" id="postsSearch" placeholder="Azienda, testo, ID...">
             </label>
-            <button class="btn ghost" type="button" id="clearPostsFilterBtn">Mostra tutte</button>
+            <label class="field">
+              <span>Righe per pagina</span>
+              <select id="postsPageSize" class="native-select">
+                <option value="14">14</option>
+                <option value="28">28</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+            </label>
+            <button class="btn ghost toolbar-action" type="button" id="clearPostsFilterBtn">Reset filtri</button>
           </div>
           <div id="postsByCompanyList" class="posts-by-company-list"></div>
           <div class="table-wrap">
@@ -2058,13 +2197,39 @@
             <h3>Timeline Pianificazione</h3>
             <p>Invii pianificati per il giorno selezionato.</p>
           </div>
-          <label class="field">
-            <span>Data pianificazione</span>
-            <div class="date-shell">
-              <input type="text" id="scheduleDate" class="date-input" placeholder="YYYY-MM-DD" autocomplete="off" inputmode="numeric">
-              <button class="date-trigger" type="button" aria-label="Apri calendario"></button>
-            </div>
-          </label>
+          <div class="posts-toolbar runtime-toolbar toolbar-sticky">
+            <label class="field">
+              <span>Data pianificazione</span>
+              <div class="date-shell">
+                <input type="text" id="scheduleDate" class="date-input" placeholder="YYYY-MM-DD" autocomplete="off" inputmode="numeric">
+                <button class="date-trigger" type="button" aria-label="Apri calendario"></button>
+              </div>
+            </label>
+            <label class="field">
+              <span>Stato</span>
+              <select id="scheduleStatusFilter" class="native-select">
+                <option value="">Tutti</option>
+                <option value="pending">In attesa</option>
+                <option value="sent">Inviato</option>
+                <option value="failed">Fallito</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Cerca task</span>
+              <input type="text" id="scheduleSearch" placeholder="Azienda, testo, stato...">
+            </label>
+            <label class="field">
+              <span>Righe per pagina</span>
+              <select id="schedulePageSize" class="native-select">
+                <option value="20">20</option>
+                <option value="40">40</option>
+                <option value="80">80</option>
+                <option value="150">150</option>
+              </select>
+            </label>
+            <button class="btn ghost toolbar-action" id="scheduleTodayBtn" type="button">Oggi</button>
+          </div>
+          <div id="scheduleSummary" class="runtime-summary"></div>
           <div class="table-wrap">
             <table>
               <thead>
@@ -2072,11 +2237,13 @@
                   <th>Ora</th>
                   <th>Post</th>
                   <th>Stato</th>
+                  <th>Azioni</th>
                 </tr>
               </thead>
               <tbody id="scheduleTable"></tbody>
             </table>
           </div>
+          <div id="schedulePagination" class="list-pagination"></div>
         </div>
 
         <div class="panel span-12">
@@ -2134,6 +2301,17 @@
       return 'http://localhost:3000';
     }
 
+    const UI_DENSITY_STORAGE_KEY = 'yosupport_ui_density_v1';
+
+    function loadUiDensity() {
+      try {
+        const value = String(localStorage.getItem(UI_DENSITY_STORAGE_KEY) || '').trim().toLowerCase();
+        return value === 'compact' ? 'compact' : 'comfortable';
+      } catch (err) {
+        return 'comfortable';
+      }
+    }
+
     const API = resolveApiBase();
 
     const state = {
@@ -2149,10 +2327,20 @@
       scheduleDate: new Date().toISOString().slice(0, 10),
       draftSearch: '',
       companiesSearch: '',
+      companiesTypeFilter: '',
       postsSearch: '',
       postsCompanyFilter: '',
+      postsStatusFilter: '',
+      scheduleSearch: '',
+      scheduleStatusFilter: '',
       companiesPage: 1,
-      postsPage: 1
+      postsPage: 1,
+      schedulePage: 1,
+      companiesPageSize: 12,
+      postsPageSize: 14,
+      schedulePageSize: 20,
+      postsByCompanyVisible: {},
+      uiDensity: loadUiDensity()
     };
     const POST_DRAFT_STORAGE_KEY = 'yosupport_post_form_draft_v1';
     const POST_DRAFT_STORAGE_VERSION = 1;
@@ -2161,6 +2349,9 @@
     const MAX_POST_BUTTON_TEXT_LENGTH = 64;
     const COMPANIES_PAGE_SIZE = 12;
     const POSTS_PAGE_SIZE = 14;
+    const SCHEDULE_PAGE_SIZE = 20;
+    const COMPANY_POST_PREVIEW_DEFAULT = 3;
+    const COMPANY_POST_PREVIEW_STEP = 5;
     const API_AUTH_STORAGE_KEY = 'yosupport_api_basic_auth_v1';
     let postDraftRestoreDone = false;
     let savingPost = false;
@@ -2180,6 +2371,7 @@
       authResetBtn: byId('authResetBtn'),
       authMessage: byId('authMessage'),
       authBtn: byId('authBtn'),
+      densityToggleBtn: byId('densityToggleBtn'),
       refreshBtn: byId('refreshBtn'),
       runScheduleBtn: byId('runScheduleBtn'),
       resetPostBtn: byId('resetPostBtn'),
@@ -2199,6 +2391,8 @@
       saveCompanyBtn: byId('saveCompanyBtn'),
       clearCompanyBtn: byId('clearCompanyBtn'),
       companiesSearch: byId('companiesSearch'),
+      companiesTypeFilter: byId('companiesTypeFilter'),
+      companiesPageSize: byId('companiesPageSize'),
       companiesTable: byId('companiesTable'),
       companiesPagination: byId('companiesPagination'),
       companiesPanel: byId('companiesPanel'),
@@ -2226,12 +2420,21 @@
       postsTable: byId('postsTable'),
       postsSearch: byId('postsSearch'),
       postsCompanyFilter: byId('postsCompanyFilter'),
+      postsStatusFilter: byId('postsStatusFilter'),
+      postsPageSize: byId('postsPageSize'),
       clearPostsFilterBtn: byId('clearPostsFilterBtn'),
       postsByCompanyList: byId('postsByCompanyList'),
       postsPagination: byId('postsPagination'),
+      postsPanel: byId('postsPanel'),
       postComposerPanel: byId('postComposerPanel'),
       scheduleDate: byId('scheduleDate'),
+      scheduleSearch: byId('scheduleSearch'),
+      scheduleStatusFilter: byId('scheduleStatusFilter'),
+      schedulePageSize: byId('schedulePageSize'),
+      scheduleTodayBtn: byId('scheduleTodayBtn'),
+      scheduleSummary: byId('scheduleSummary'),
       scheduleTable: byId('scheduleTable'),
+      schedulePagination: byId('schedulePagination'),
       logsTable: byId('logsTable'),
       statCompanies: byId('statCompanies'),
       statActivePosts: byId('statActivePosts'),
@@ -2261,6 +2464,28 @@
           localStorage.removeItem(API_AUTH_STORAGE_KEY);
         }
       } catch (err) {}
+    }
+
+    function saveUiDensity(mode) {
+      try {
+        localStorage.setItem(UI_DENSITY_STORAGE_KEY, mode);
+      } catch (err) {}
+    }
+
+    function applyUiDensity(mode) {
+      const normalized = mode === 'compact' ? 'compact' : 'comfortable';
+      state.uiDensity = normalized;
+      document.body.dataset.density = normalized;
+      if (els.densityToggleBtn) {
+        els.densityToggleBtn.textContent = normalized === 'compact' ? 'Vista: Compatta' : 'Vista: Standard';
+      }
+    }
+
+    function toggleUiDensity() {
+      const next = state.uiDensity === 'compact' ? 'comfortable' : 'compact';
+      applyUiDensity(next);
+      saveUiDensity(next);
+      setStatus(next === 'compact' ? 'Vista compatta attivata.' : 'Vista standard attivata.', 'success');
     }
 
     function encodeBasicAuth(username, password) {
@@ -3333,25 +3558,41 @@
 
     function getFilteredCompanies() {
       const query = normalizeSearchText(state.companiesSearch);
+      const typeFilter = String(state.companiesTypeFilter || '').toLowerCase();
       const sorted = sortCompaniesAlphabetically(state.companies);
-      if (!query) return sorted;
       return sorted.filter((company) => {
+        const isPremium = Number(company.premium) === 1;
+        if (typeFilter === 'premium' && !isPremium) return false;
+        if (typeFilter === 'standard' && isPremium) return false;
+        if (!query) return true;
         const haystack = [
           company.id,
           company.name,
           company.preferredTime,
-          Number(company.premium) === 1 ? 'premium' : 'standard'
+          isPremium ? 'premium' : 'standard',
+          company.postCount
         ].map((value) => String(value || '').toLowerCase()).join(' ');
         return haystack.includes(query);
       });
     }
 
+    function getPostLifecycle(post, today = new Date().toISOString().slice(0, 10)) {
+      if (!post || Number(post.active) !== 1) return 'paused';
+      if (isValidDateString(post.endDate) && post.endDate < today) return 'expired';
+      if (isValidDateString(post.startDate) && post.startDate > today) return 'upcoming';
+      return 'active';
+    }
+
     function getFilteredPosts() {
       const selectedCompanyId = Number(state.postsCompanyFilter || 0);
       const query = normalizeSearchText(state.postsSearch);
+      const statusFilter = String(state.postsStatusFilter || '').toLowerCase();
+      const today = new Date().toISOString().slice(0, 10);
       const sortedPosts = sortPostsAlphabetically(state.posts);
       return sortedPosts.filter((post) => {
         if (selectedCompanyId && Number(post.companyId) !== selectedCompanyId) return false;
+        const lifecycle = getPostLifecycle(post, today);
+        if (statusFilter && lifecycle !== statusFilter) return false;
         if (!query) return true;
         const content = summarizePostContent(post);
         const haystack = [
@@ -3364,7 +3605,34 @@
           post.text,
           post.draftCaption,
           post.draftText,
-          Number(post.companyPremium) === 1 ? 'premium' : 'standard'
+          Number(post.companyPremium) === 1 ? 'premium' : 'standard',
+          lifecycle
+        ].map((value) => String(value || '').toLowerCase()).join(' ');
+        return haystack.includes(query);
+      });
+    }
+
+    function getFilteredScheduleItems() {
+      const query = normalizeSearchText(state.scheduleSearch);
+      const statusFilter = String(state.scheduleStatusFilter || '').toLowerCase();
+      const sorted = [...(state.scheduleItems || [])].sort((a, b) => String(a?.scheduledAt || '').localeCompare(String(b?.scheduledAt || '')));
+      return sorted.filter((item) => {
+        const status = String(item?.status || 'pending').toLowerCase();
+        if (statusFilter && status !== statusFilter) return false;
+        if (!query) return true;
+        const timeText = item?.scheduledAt
+          ? new Date(item.scheduledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '';
+        const haystack = [
+          item?.schedulePostId,
+          item?.postId,
+          item?.companyName,
+          item?.postText,
+          item?.draftCaption,
+          item?.draftText,
+          translateDeliveryStatus(status),
+          status,
+          timeText
         ].map((value) => String(value || '').toLowerCase()).join(' ');
         return haystack.includes(query);
       });
@@ -3385,6 +3653,10 @@
         state.companies = companies || [];
         state.drafts = drafts || [];
         state.posts = posts || [];
+        const availableCompanyIds = new Set(state.posts.map((post) => Number(post.companyId || 0)));
+        state.postsByCompanyVisible = Object.fromEntries(
+          Object.entries(state.postsByCompanyVisible || {}).filter(([companyId]) => availableCompanyIds.has(Number(companyId)))
+        );
         state.logs = logs || [];
         state.settings = settings || null;
         state.scheduleItems = scheduleItems || [];
@@ -3542,10 +3814,17 @@
 
     function renderCompanies() {
       const filteredCompanies = getFilteredCompanies();
-      const pagination = paginateRows(filteredCompanies, state.companiesPage, COMPANIES_PAGE_SIZE);
+      const pageSize = Math.max(1, Number(state.companiesPageSize || COMPANIES_PAGE_SIZE));
+      const pagination = paginateRows(filteredCompanies, state.companiesPage, pageSize);
       state.companiesPage = pagination.page;
       if (els.companiesSearch && els.companiesSearch.value !== state.companiesSearch) {
         els.companiesSearch.value = state.companiesSearch;
+      }
+      if (els.companiesTypeFilter && els.companiesTypeFilter.value !== state.companiesTypeFilter) {
+        els.companiesTypeFilter.value = state.companiesTypeFilter;
+      }
+      if (els.companiesPageSize && String(els.companiesPageSize.value || '') !== String(pageSize)) {
+        els.companiesPageSize.value = String(pageSize);
       }
       els.companiesTable.innerHTML = pagination.items.map((company) => {
         const tier = Number(company.premium) === 1
@@ -3560,6 +3839,7 @@
             <td>${company.postCount || 0}</td>
             <td>
               <div class="row">
+                <button class="btn xs ghost" data-action="company-focus-posts" data-id="${company.id}">Post</button>
                 <button class="btn xs" data-action="company-edit" data-id="${company.id}">Modifica</button>
                 <button class="btn xs ghost" data-action="company-delete" data-id="${company.id}">Elimina</button>
               </div>
@@ -3568,6 +3848,8 @@
         `;
       }).join('') || '<tr><td colspan="6" class="muted">Nessuna azienda presente.</td></tr>';
       renderPagination(els.companiesPagination, pagination, 'companies');
+      refreshCustomSelect(els.companiesTypeFilter);
+      refreshCustomSelect(els.companiesPageSize);
 
       const sortedCompanies = sortCompaniesAlphabetically(state.companies);
       els.postCompany.innerHTML = '<option value="">Seleziona azienda</option>' + sortedCompanies.map((company) => (
@@ -3657,14 +3939,31 @@
     function renderPostsByCompany(posts) {
       const selectedCompanyId = Number(state.postsCompanyFilter || 0);
       const sortedCompanies = sortCompaniesAlphabetically(state.companies);
-      const availableCompanies = selectedCompanyId
-        ? sortedCompanies.filter((company) => Number(company.id) === selectedCompanyId)
-        : sortedCompanies;
+      const postsByCompanyId = new Map();
+      (posts || []).forEach((post) => {
+        const key = Number(post.companyId || 0);
+        if (!key) return;
+        if (!postsByCompanyId.has(key)) postsByCompanyId.set(key, []);
+        postsByCompanyId.get(key).push(post);
+      });
+
+      const availableCompanies = sortedCompanies.filter((company) => {
+        const companyId = Number(company.id || 0);
+        if (!companyId || !postsByCompanyId.has(companyId)) return false;
+        if (selectedCompanyId && companyId !== selectedCompanyId) return false;
+        return true;
+      });
 
       const cards = availableCompanies.map((company) => {
-        const companyPosts = posts.filter((post) => Number(post.companyId) === Number(company.id));
+        const companyId = Number(company.id || 0);
+        const companyPosts = postsByCompanyId.get(companyId) || [];
         if (!companyPosts.length) return '';
-        const previewItems = companyPosts.slice(0, 3).map((post) => {
+        const requestedVisible = Number(state.postsByCompanyVisible?.[companyId] || COMPANY_POST_PREVIEW_DEFAULT);
+        const visibleLimit = Math.max(COMPANY_POST_PREVIEW_DEFAULT, requestedVisible);
+        const visiblePosts = companyPosts.slice(0, visibleLimit);
+        const hiddenCount = Math.max(0, companyPosts.length - visiblePosts.length);
+
+        const previewItems = visiblePosts.map((post) => {
           const status = getPostStatus(post);
           const content = summarizePostContent(post);
           return `
@@ -3681,12 +3980,18 @@
             </div>
           `;
         }).join('');
-        const extra = companyPosts.length > 3
-          ? `<div class="company-post-meta">+${companyPosts.length - 3} post non mostrati in questa pagina</div>`
+        const extra = hiddenCount > 0
+          ? `<div class="company-post-meta">Mostrati ${visiblePosts.length}/${companyPosts.length} post • altri ${hiddenCount}</div>`
+          : `<div class="company-post-meta">Mostrati tutti i ${companyPosts.length} post</div>`;
+        const showMoreButton = hiddenCount > 0
+          ? `<button class="btn xs ghost" type="button" data-action="posts-company-more" data-id="${companyId}">+${Math.min(COMPANY_POST_PREVIEW_STEP, hiddenCount)} altri</button>`
+          : '';
+        const showLessButton = visiblePosts.length > COMPANY_POST_PREVIEW_DEFAULT
+          ? `<button class="btn xs ghost" type="button" data-action="posts-company-less" data-id="${companyId}">Mostra meno</button>`
           : '';
         const filterButton = selectedCompanyId
           ? '<button class="btn xs ghost" type="button" data-action="posts-clear-filter">Mostra tutte</button>'
-          : `<button class="btn xs ghost" type="button" data-action="posts-filter-company" data-id="${company.id}">Solo questa</button>`;
+          : `<button class="btn xs ghost" type="button" data-action="posts-filter-company" data-id="${companyId}">Solo questa</button>`;
         const premiumTag = Number(company.premium) === 1 ? '<span class="premium-tag">Premium</span>' : '';
         return `
           <article class="company-post-card">
@@ -3700,7 +4005,11 @@
             <div class="company-post-items">
               ${previewItems}
             </div>
-            ${extra}
+            <div class="company-post-controls">
+              ${extra}
+              ${showMoreButton}
+              ${showLessButton}
+            </div>
           </article>
         `;
       }).filter(Boolean);
@@ -3713,13 +4022,22 @@
 
     function renderPosts() {
       const filteredPosts = getFilteredPosts();
-      const pagination = paginateRows(filteredPosts, state.postsPage, POSTS_PAGE_SIZE);
+      const pageSize = Math.max(1, Number(state.postsPageSize || POSTS_PAGE_SIZE));
+      const pagination = paginateRows(filteredPosts, state.postsPage, pageSize);
       state.postsPage = pagination.page;
       const visiblePosts = pagination.items;
       if (els.postsSearch && els.postsSearch.value !== state.postsSearch) {
         els.postsSearch.value = state.postsSearch;
       }
-      renderPostsByCompany(visiblePosts);
+      if (els.postsStatusFilter && els.postsStatusFilter.value !== state.postsStatusFilter) {
+        els.postsStatusFilter.value = state.postsStatusFilter;
+      }
+      if (els.postsPageSize && String(els.postsPageSize.value || '') !== String(pageSize)) {
+        els.postsPageSize.value = String(pageSize);
+      }
+      refreshCustomSelect(els.postsStatusFilter);
+      refreshCustomSelect(els.postsPageSize);
+      renderPostsByCompany(filteredPosts);
 
       els.postsTable.innerHTML = visiblePosts.map((post) => {
         const period = `${post.startDate} → ${post.endDate}`;
@@ -3754,25 +4072,94 @@
       renderPagination(els.postsPagination, pagination, 'posts');
     }
 
+    function renderScheduleSummary(filteredItems) {
+      if (!els.scheduleSummary) return;
+      const allItems = Array.isArray(state.scheduleItems) ? state.scheduleItems : [];
+      const visibleItems = Array.isArray(filteredItems) ? filteredItems : allItems;
+      const pendingCount = allItems.filter((item) => String(item?.status || 'pending') === 'pending').length;
+      const sentCount = allItems.filter((item) => String(item?.status || '') === 'sent').length;
+      const failedCount = allItems.filter((item) => String(item?.status || '') === 'failed').length;
+      els.scheduleSummary.innerHTML = `
+        <div class="runtime-summary-item">
+          <span>Task giorno</span>
+          <strong>${escapeHtml(String(allItems.length))}</strong>
+        </div>
+        <div class="runtime-summary-item">
+          <span>Visibili con filtri</span>
+          <strong>${escapeHtml(String(visibleItems.length))}</strong>
+        </div>
+        <div class="runtime-summary-item">
+          <span>In attesa</span>
+          <strong>${escapeHtml(String(pendingCount))}</strong>
+        </div>
+        <div class="runtime-summary-item">
+          <span>Inviati</span>
+          <strong>${escapeHtml(String(sentCount))}</strong>
+        </div>
+        <div class="runtime-summary-item">
+          <span>Falliti</span>
+          <strong>${escapeHtml(String(failedCount))}</strong>
+        </div>
+      `;
+    }
+
     function renderSchedule() {
-      els.scheduleTable.innerHTML = state.scheduleItems.map((item) => {
+      const filteredItems = getFilteredScheduleItems();
+      const pageSize = Math.max(1, Number(state.schedulePageSize || SCHEDULE_PAGE_SIZE));
+      const pagination = paginateRows(filteredItems, state.schedulePage, pageSize);
+      state.schedulePage = pagination.page;
+      if (els.scheduleSearch && els.scheduleSearch.value !== state.scheduleSearch) {
+        els.scheduleSearch.value = state.scheduleSearch;
+      }
+      if (els.scheduleStatusFilter && els.scheduleStatusFilter.value !== state.scheduleStatusFilter) {
+        els.scheduleStatusFilter.value = state.scheduleStatusFilter;
+      }
+      if (els.schedulePageSize && String(els.schedulePageSize.value || '') !== String(pageSize)) {
+        els.schedulePageSize.value = String(pageSize);
+      }
+      refreshCustomSelect(els.scheduleStatusFilter);
+      refreshCustomSelect(els.schedulePageSize);
+      renderScheduleSummary(filteredItems);
+      els.scheduleTable.innerHTML = pagination.items.map((item) => {
         const status = item.status || 'pending';
         const statusClass = status === 'sent' ? 'success' : status === 'failed' ? 'failed' : 'pending';
         const statusLabel = translateDeliveryStatus(status);
         const time = item.scheduledAt ? new Date(item.scheduledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-';
         const postLabel = `${item.companyName || ''}`;
         const summary = item.postText || formatMediaType(item.draftMediaType) || '';
+        const postId = Number(item.postId || item.schedulePostId || 0);
+        const editButton = postId
+          ? `<button class="btn xs ghost" type="button" data-action="schedule-post-edit" data-id="${postId}">Modifica</button>`
+          : '';
+        const publishButton = postId
+          ? `<button class="btn xs ghost" type="button" data-action="schedule-post-publish" data-id="${postId}">Pubblica</button>`
+          : '';
         return `
           <tr>
             <td>${escapeHtml(time)}</td>
             <td>
-              <div>${escapeHtml(postLabel)}</div>
+              <div>${escapeHtml(postLabel)}${postId ? ` <span class="muted">#${postId}</span>` : ''}</div>
               <div class="muted">${escapeHtml(shorten(summary, 36))}</div>
             </td>
             <td><span class="pill ${statusClass}">${escapeHtml(statusLabel)}</span></td>
+            <td>
+              <div class="row">
+                ${editButton}
+                ${publishButton}
+              </div>
+            </td>
           </tr>
         `;
-      }).join('') || '<tr><td colspan="3" class="muted">Nessuna pianificazione per questo giorno.</td></tr>';
+      }).join('');
+
+      if (!els.scheduleTable.innerHTML) {
+        const hasBaseItems = Array.isArray(state.scheduleItems) && state.scheduleItems.length > 0;
+        const message = hasBaseItems
+          ? 'Nessuna task con i filtri correnti.'
+          : 'Nessuna pianificazione per questo giorno.';
+        els.scheduleTable.innerHTML = `<tr><td colspan="4" class="muted">${escapeHtml(message)}</td></tr>`;
+      }
+      renderPagination(els.schedulePagination, pagination, 'schedule');
     }
 
     function renderLogs() {
@@ -3814,21 +4201,15 @@
     }
 
     function isPostActiveNow(post, today) {
-      if (!post || Number(post.active) !== 1) return false;
-      if (isValidDateString(post.endDate) && post.endDate < today) return false;
-      if (isValidDateString(post.startDate) && post.startDate > today) return false;
-      return true;
+      return getPostLifecycle(post, today) === 'active';
     }
 
     function getPostStatus(post) {
       const today = new Date().toISOString().slice(0, 10);
-      if (!post || Number(post.active) !== 1) return { label: 'In pausa', className: 'paused' };
-      if (isValidDateString(post.endDate) && post.endDate < today) {
-        return { label: 'Scaduto', className: 'expired' };
-      }
-      if (isValidDateString(post.startDate) && post.startDate > today) {
-        return { label: 'Programmato', className: 'scheduled' };
-      }
+      const lifecycle = getPostLifecycle(post, today);
+      if (lifecycle === 'paused') return { label: 'In pausa', className: 'paused' };
+      if (lifecycle === 'expired') return { label: 'Scaduto', className: 'expired' };
+      if (lifecycle === 'upcoming') return { label: 'Programmato', className: 'scheduled' };
       return { label: 'Attivo', className: 'success' };
     }
 
@@ -4076,6 +4457,11 @@
     function handleGlobalShortcuts(event) {
       const modifier = event.ctrlKey || event.metaKey;
       if (!modifier) return;
+      if (event.shiftKey && event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        toggleUiDensity();
+        return;
+      }
       const active = document.activeElement;
       if (event.key.toLowerCase() === 's') {
         event.preventDefault();
@@ -4108,20 +4494,83 @@
       renderPosts();
     }
 
+    function setPostsCompanyCardLimit(companyId, nextLimit) {
+      const normalizedId = Number(companyId || 0);
+      if (!normalizedId) return;
+      const normalizedLimit = Math.max(COMPANY_POST_PREVIEW_DEFAULT, Number(nextLimit || COMPANY_POST_PREVIEW_DEFAULT));
+      if (!Number.isFinite(normalizedLimit)) return;
+      state.postsByCompanyVisible = {
+        ...(state.postsByCompanyVisible || {}),
+        [normalizedId]: normalizedLimit
+      };
+      renderPosts();
+    }
+
+    function collapsePostsCompanyCard(companyId) {
+      const normalizedId = Number(companyId || 0);
+      if (!normalizedId) return;
+      const next = { ...(state.postsByCompanyVisible || {}) };
+      delete next[normalizedId];
+      state.postsByCompanyVisible = next;
+      renderPosts();
+    }
+
+    function resetPostsFilters() {
+      state.postsCompanyFilter = '';
+      state.postsSearch = '';
+      state.postsStatusFilter = '';
+      state.postsPage = 1;
+      state.postsByCompanyVisible = {};
+      if (els.postsCompanyFilter.value !== '') {
+        els.postsCompanyFilter.value = '';
+      }
+      if (els.postsSearch.value !== '') {
+        els.postsSearch.value = '';
+      }
+      if (els.postsStatusFilter.value !== '') {
+        els.postsStatusFilter.value = '';
+      }
+      refreshCustomSelect(els.postsCompanyFilter);
+      refreshCustomSelect(els.postsStatusFilter);
+      renderPosts();
+    }
+
+    function applyScheduleDate(value, shouldReload = true) {
+      if (!isValidDateString(value)) return false;
+      state.scheduleDate = value;
+      state.schedulePage = 1;
+      if (els.scheduleDate.value !== value) {
+        els.scheduleDate.value = value;
+      }
+      if (shouldReload) {
+        loadSchedule();
+      } else {
+        renderSchedule();
+      }
+      return true;
+    }
+
     function handlePaginationAction(target, action) {
       if (!target || !action) return;
       if (target === 'companies') {
-        const totalPages = paginateRows(getFilteredCompanies(), state.companiesPage, COMPANIES_PAGE_SIZE).totalPages;
+        const totalPages = paginateRows(getFilteredCompanies(), state.companiesPage, state.companiesPageSize || COMPANIES_PAGE_SIZE).totalPages;
         if (action === 'page-prev') state.companiesPage = Math.max(1, state.companiesPage - 1);
         if (action === 'page-next') state.companiesPage = Math.min(totalPages, state.companiesPage + 1);
         renderCompanies();
         return;
       }
       if (target === 'posts') {
-        const totalPages = paginateRows(getFilteredPosts(), state.postsPage, POSTS_PAGE_SIZE).totalPages;
+        const totalPages = paginateRows(getFilteredPosts(), state.postsPage, state.postsPageSize || POSTS_PAGE_SIZE).totalPages;
         if (action === 'page-prev') state.postsPage = Math.max(1, state.postsPage - 1);
         if (action === 'page-next') state.postsPage = Math.min(totalPages, state.postsPage + 1);
         renderPosts();
+        return;
+      }
+      if (target === 'schedule') {
+        const totalPages = paginateRows(getFilteredScheduleItems(), state.schedulePage, state.schedulePageSize || SCHEDULE_PAGE_SIZE).totalPages;
+        if (action === 'page-prev') state.schedulePage = Math.max(1, state.schedulePage - 1);
+        if (action === 'page-next') state.schedulePage = Math.min(totalPages, state.schedulePage + 1);
+        renderSchedule();
       }
     }
 
@@ -4145,6 +4594,9 @@
 
     els.refreshBtn.addEventListener('click', loadAll);
     els.authBtn.addEventListener('click', () => openAuthOverlay('Inserisci credenziali API.'));
+    if (els.densityToggleBtn) {
+      els.densityToggleBtn.addEventListener('click', toggleUiDensity);
+    }
     els.authForm.addEventListener('submit', submitApiAuth);
     els.authResetBtn.addEventListener('click', clearSavedApiAuth);
     els.runScheduleBtn.addEventListener('click', runSchedule);
@@ -4161,6 +4613,21 @@
     if (els.companiesSearch) {
       els.companiesSearch.addEventListener('input', () => {
         state.companiesSearch = els.companiesSearch.value || '';
+        state.companiesPage = 1;
+        renderCompanies();
+      });
+    }
+    if (els.companiesTypeFilter) {
+      els.companiesTypeFilter.addEventListener('change', () => {
+        state.companiesTypeFilter = String(els.companiesTypeFilter.value || '');
+        state.companiesPage = 1;
+        renderCompanies();
+      });
+    }
+    if (els.companiesPageSize) {
+      els.companiesPageSize.addEventListener('change', () => {
+        const parsed = Number(els.companiesPageSize.value || COMPANIES_PAGE_SIZE);
+        state.companiesPageSize = Number.isFinite(parsed) && parsed > 0 ? parsed : COMPANIES_PAGE_SIZE;
         state.companiesPage = 1;
         renderCompanies();
       });
@@ -4191,8 +4658,23 @@
         renderPosts();
       });
     }
+    if (els.postsStatusFilter) {
+      els.postsStatusFilter.addEventListener('change', () => {
+        state.postsStatusFilter = String(els.postsStatusFilter.value || '');
+        state.postsPage = 1;
+        renderPosts();
+      });
+    }
+    if (els.postsPageSize) {
+      els.postsPageSize.addEventListener('change', () => {
+        const parsed = Number(els.postsPageSize.value || POSTS_PAGE_SIZE);
+        state.postsPageSize = Number.isFinite(parsed) && parsed > 0 ? parsed : POSTS_PAGE_SIZE;
+        state.postsPage = 1;
+        renderPosts();
+      });
+    }
     els.clearPostsFilterBtn.addEventListener('click', () => {
-      setPostsCompanyFilter(0);
+      resetPostsFilters();
     });
     if (els.companiesPagination) {
       els.companiesPagination.addEventListener('click', (event) => {
@@ -4204,6 +4686,14 @@
     }
     if (els.postsPagination) {
       els.postsPagination.addEventListener('click', (event) => {
+        const action = event.target?.dataset?.action;
+        const target = event.target?.dataset?.target;
+        if (!action || !target) return;
+        handlePaginationAction(target, action);
+      });
+    }
+    if (els.schedulePagination) {
+      els.schedulePagination.addEventListener('click', (event) => {
         const action = event.target?.dataset?.action;
         const target = event.target?.dataset?.target;
         if (!action || !target) return;
@@ -4232,13 +4722,38 @@
 
     els.scheduleDate.addEventListener('change', () => {
       const value = els.scheduleDate.value.trim();
-      if (isValidDateString(value)) {
-        state.scheduleDate = value;
-        loadSchedule();
-      } else {
+      if (!applyScheduleDate(value, true)) {
         els.scheduleDate.value = state.scheduleDate;
       }
     });
+    if (els.scheduleSearch) {
+      els.scheduleSearch.addEventListener('input', () => {
+        state.scheduleSearch = els.scheduleSearch.value || '';
+        state.schedulePage = 1;
+        renderSchedule();
+      });
+    }
+    if (els.scheduleStatusFilter) {
+      els.scheduleStatusFilter.addEventListener('change', () => {
+        state.scheduleStatusFilter = String(els.scheduleStatusFilter.value || '');
+        state.schedulePage = 1;
+        renderSchedule();
+      });
+    }
+    if (els.schedulePageSize) {
+      els.schedulePageSize.addEventListener('change', () => {
+        const parsed = Number(els.schedulePageSize.value || SCHEDULE_PAGE_SIZE);
+        state.schedulePageSize = Number.isFinite(parsed) && parsed > 0 ? parsed : SCHEDULE_PAGE_SIZE;
+        state.schedulePage = 1;
+        renderSchedule();
+      });
+    }
+    if (els.scheduleTodayBtn) {
+      els.scheduleTodayBtn.addEventListener('click', () => {
+        const today = new Date().toISOString().slice(0, 10);
+        applyScheduleDate(today, true);
+      });
+    }
 
     [
       els.postCompany,
@@ -4323,6 +4838,12 @@
       const action = event.target?.dataset?.action;
       const id = Number(event.target?.dataset?.id || 0);
       if (!action || !id) return;
+      if (action === 'company-focus-posts') {
+        setPostsCompanyFilter(id);
+        focusPanel(els.postsPanel, els.postsSearch);
+        setStatus(`Filtro post impostato su azienda #${id}.`, 'success');
+        return;
+      }
       const company = state.companies.find((item) => item.id === id);
       if (action === 'company-edit' && company) {
         state.companyEditId = company.id;
@@ -4362,8 +4883,32 @@
         setPostsCompanyFilter(0);
         return;
       }
+      if (action === 'posts-company-more' && id) {
+        const currentLimit = Number(state.postsByCompanyVisible?.[id] || COMPANY_POST_PREVIEW_DEFAULT);
+        setPostsCompanyCardLimit(id, currentLimit + COMPANY_POST_PREVIEW_STEP);
+        return;
+      }
+      if (action === 'posts-company-less' && id) {
+        collapsePostsCompanyCard(id);
+        return;
+      }
       handlePostAction(action, id);
     });
+
+    if (els.scheduleTable) {
+      els.scheduleTable.addEventListener('click', (event) => {
+        const action = event.target?.dataset?.action;
+        const id = Number(event.target?.dataset?.id || 0);
+        if (!action || !id) return;
+        if (action === 'schedule-post-edit') {
+          handlePostAction('post-edit', id);
+          return;
+        }
+        if (action === 'schedule-post-publish') {
+          handlePostAction('post-publish', id);
+        }
+      });
+    }
 
     document.addEventListener('keydown', handleGlobalShortcuts);
     window.addEventListener('beforeunload', (event) => {
@@ -4376,12 +4921,26 @@
 
     document.querySelectorAll('.date-input').forEach(buildDatePicker);
     document.querySelectorAll('.time-input').forEach(buildTimePicker);
+    applyUiDensity(state.uiDensity);
     syncAuthButton();
     els.scheduleDate.value = state.scheduleDate;
+    if (els.scheduleSearch) els.scheduleSearch.value = state.scheduleSearch;
+    if (els.companiesTypeFilter) els.companiesTypeFilter.value = state.companiesTypeFilter;
+    if (els.companiesPageSize) els.companiesPageSize.value = String(state.companiesPageSize);
+    if (els.postsStatusFilter) els.postsStatusFilter.value = state.postsStatusFilter;
+    if (els.postsPageSize) els.postsPageSize.value = String(state.postsPageSize);
+    if (els.scheduleStatusFilter) els.scheduleStatusFilter.value = state.scheduleStatusFilter;
+    if (els.schedulePageSize) els.schedulePageSize.value = String(state.schedulePageSize);
     setPostButtons([]);
     updatePostChecklist();
     refreshCustomSelect(els.postCompany);
     refreshCustomSelect(els.postsCompanyFilter);
+    refreshCustomSelect(els.companiesTypeFilter);
+    refreshCustomSelect(els.companiesPageSize);
+    refreshCustomSelect(els.postsStatusFilter);
+    refreshCustomSelect(els.postsPageSize);
+    refreshCustomSelect(els.scheduleStatusFilter);
+    refreshCustomSelect(els.schedulePageSize);
     loadAll().then(() => {
       restorePostFormDraft();
     }).catch(() => {});

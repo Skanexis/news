@@ -35,6 +35,8 @@ if (!fs.existsSync(uploadsDir)) {
 const allowedPlatforms = new Set(['telegram']);
 const MAX_POST_BUTTONS = 8;
 const MAX_POST_BUTTON_TEXT_LENGTH = 64;
+const REGULAR_ROTATION_WEIGHT = 2;
+const PREMIUM_ROTATION_WEIGHT = 3;
 
 function badRequest(res, message) {
  return res.status(400).send({ ok: false, error: message });
@@ -311,6 +313,10 @@ function normalizeTime(value) {
  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+function normalizePremiumFlag(value) {
+ return value === 1 || value === true || value === '1' ? 1 : 0;
+}
+
 function timeToMinutes(value) {
  const normalized = normalizeTime(value);
  if (!normalized) return null;
@@ -526,42 +532,182 @@ function getActiveTelegramPostsForDate(targetDate) {
  return db.prepare(`
   SELECT posts.*,
     companies.name as companyName,
+    COALESCE(companies.premium, 0) as companyPremium,
     companies.preferredTime,
     links.code as linkCode
    FROM posts
    JOIN companies ON posts.companyId = companies.id
    LEFT JOIN links ON posts.linkId = links.id
    WHERE posts.active=1 AND posts.startDate<=? AND posts.endDate>=? AND posts.platform = 'telegram'
- `).all(targetDate, targetDate);
+   ORDER BY LOWER(companies.name) ASC, posts.id ASC
+  `).all(targetDate, targetDate);
 }
 
-function calculateScheduleForecast(date, posts, config) {
- const perPostCounts = new Map(posts.map((post) => [post.id, 0]));
- const startMinutes = timeToMinutes(config.scheduleTime);
- const endMinutes = timeToMinutes(config.runtimeEndTime);
- let totalPublications = 0;
+function minutesToTimeString(minutes) {
+ if (!Number.isFinite(minutes)) return null;
+ const normalized = Math.max(0, Math.floor(minutes));
+ const hh = Math.floor(normalized / 60) % 24;
+ const mm = normalized % 60;
+ return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
 
- if (posts.length && startMinutes !== null && endMinutes !== null && endMinutes >= startMinutes) {
-  let pointer = 0;
-  let currentMinutes = startMinutes;
-  while (currentMinutes <= endMinutes) {
-   const post = posts[pointer];
-   perPostCounts.set(post.id, (perPostCounts.get(post.id) || 0) + 1);
-   totalPublications += 1;
-   pointer += 1;
-   if (pointer >= posts.length) {
-    pointer = 0;
-    currentMinutes += config.minIntervalMinutes + config.rotationGapMinutes;
-   } else {
-    currentMinutes += config.minIntervalMinutes;
+function compareCompanyPosts(a, b) {
+ const nameA = String(a?.companyName || '');
+ const nameB = String(b?.companyName || '');
+ const byName = nameA.localeCompare(nameB, 'en', { sensitivity: 'base' });
+ if (byName) return byName;
+ return Number(a?.id || 0) - Number(b?.id || 0);
+}
+
+function getPostRotationWeight(post) {
+ return Number(post?.companyPremium) === 1 ? PREMIUM_ROTATION_WEIGHT : REGULAR_ROTATION_WEIGHT;
+}
+
+function normalizeRotationCursor(value, sequenceLength) {
+ const raw = Number(value || 0);
+ if (!sequenceLength || !Number.isFinite(raw) || raw < 0) return 0;
+ return Math.floor(raw) % sequenceLength;
+}
+
+function getStoredRotationCursor(sequenceLength) {
+ return normalizeRotationCursor(getSetting('runtimeRotationCursor'), sequenceLength);
+}
+
+function storeRotationCursor(cursor, targetDate, sequenceLength) {
+ if (!sequenceLength) return;
+ setSetting('runtimeRotationCursor', String(normalizeRotationCursor(cursor, sequenceLength)));
+ if (isValidDateString(targetDate)) {
+  setSetting('runtimeRotationDate', targetDate);
+ }
+}
+
+function buildWeightedRotation(posts) {
+ const sortedPosts = [...posts].sort(compareCompanyPosts);
+ if (!sortedPosts.length) {
+  return { sequence: [], totalWeight: 0, sortedPosts };
+ }
+ const nodes = sortedPosts.map((post, index) => ({
+  post,
+  index,
+  weight: getPostRotationWeight(post),
+  current: 0
+ }));
+ const totalWeight = nodes.reduce((sum, node) => sum + node.weight, 0);
+ if (!totalWeight) {
+  return { sequence: [], totalWeight: 0, sortedPosts };
+ }
+ const sequence = [];
+ for (let step = 0; step < totalWeight; step += 1) {
+  let best = null;
+  for (const node of nodes) {
+   node.current += node.weight;
+   if (!best || node.current > best.current) {
+    best = node;
+    continue;
+   }
+   if (node.current === best.current) {
+    const byPost = compareCompanyPosts(node.post, best.post);
+    if (byPost < 0 || (byPost === 0 && node.index < best.index)) {
+     best = node;
+    }
    }
   }
+  best.current -= totalWeight;
+  sequence.push(best.post);
+ }
+ return { sequence, totalWeight, sortedPosts };
+}
+
+function buildRuntimePlan(targetDate, posts, config, options = {}) {
+ const minIntervalMinutes = Math.max(1, Number(config.minIntervalMinutes) || 1);
+ const rotationGapMinutes = Math.max(0, Number(config.rotationGapMinutes) || 0);
+ const windowStart = timeToMinutes(config.scheduleTime);
+ const windowEnd = timeToMinutes(config.runtimeEndTime);
+ const rotation = buildWeightedRotation(posts);
+ const sequence = rotation.sequence;
+ const sortedPosts = rotation.sortedPosts;
+ const perPostCounts = new Map(sortedPosts.map((post) => [post.id, 0]));
+ const defaultResult = {
+  sequenceLength: sequence.length,
+  totalWeight: rotation.totalWeight,
+  sortedPosts,
+  perPostCounts,
+  slots: [],
+  totalPublications: 0,
+  fullRotations: 0,
+  partialPublications: 0,
+  startCursor: 0,
+  endCursor: 0,
+  windowStartMinutes: windowStart,
+  windowEndMinutes: windowEnd
+ };
+ if (!sequence.length || windowStart === null || windowEnd === null || windowEnd < windowStart) {
+  return defaultResult;
  }
 
- const perPost = posts.map((post) => ({
+ let runtimeStartMinutes = windowStart;
+ const isToday = targetDate === new Date().toISOString().slice(0, 10);
+ if (options.startFromNow && isToday) {
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  runtimeStartMinutes = Math.max(runtimeStartMinutes, nowMinutes);
+ }
+ if (runtimeStartMinutes > windowEnd) {
+  return {
+   ...defaultResult,
+   startCursor: normalizeRotationCursor(options.startCursor, sequence.length),
+   endCursor: normalizeRotationCursor(options.startCursor, sequence.length),
+   windowStartMinutes: runtimeStartMinutes
+  };
+ }
+
+ const startCursor = options.startCursor === undefined || options.startCursor === null
+  ? getStoredRotationCursor(sequence.length)
+  : normalizeRotationCursor(options.startCursor, sequence.length);
+ let pointer = startCursor;
+ let currentMinutes = runtimeStartMinutes;
+ const slots = [];
+
+ while (currentMinutes <= windowEnd) {
+  const post = sequence[pointer];
+  slots.push({ post, minutes: currentMinutes });
+  perPostCounts.set(post.id, (perPostCounts.get(post.id) || 0) + 1);
+  pointer = (pointer + 1) % sequence.length;
+  currentMinutes += minIntervalMinutes;
+  if (pointer === 0) currentMinutes += rotationGapMinutes;
+ }
+
+ const totalPublications = slots.length;
+ const fullRotations = sequence.length ? Math.floor(totalPublications / sequence.length) : 0;
+ const partialPublications = sequence.length ? totalPublications % sequence.length : 0;
+
+ return {
+  sequenceLength: sequence.length,
+  totalWeight: rotation.totalWeight,
+  sortedPosts,
+  perPostCounts,
+  slots,
+  totalPublications,
+  fullRotations,
+  partialPublications,
+  startCursor,
+  endCursor: pointer,
+  windowStartMinutes: runtimeStartMinutes,
+  windowEndMinutes: windowEnd
+ };
+}
+
+function calculateScheduleForecast(date, posts, config, options = {}) {
+ const plan = buildRuntimePlan(date, posts, config, {
+  startFromNow: Boolean(options.startFromNow),
+  startCursor: options.startCursor
+ });
+ const perPost = plan.sortedPosts.map((post) => ({
   postId: post.id,
   companyName: post.companyName || null,
-  publishCount: perPostCounts.get(post.id) || 0
+  companyPremium: Number(post.companyPremium) === 1 ? 1 : 0,
+  weight: getPostRotationWeight(post),
+  publishCount: plan.perPostCounts.get(post.id) || 0
  }));
 
  const distributionMap = new Map();
@@ -572,17 +718,22 @@ function calculateScheduleForecast(date, posts, config) {
   .map(([publishCount, postCount]) => ({ publishCount, postCount }))
   .sort((a, b) => b.publishCount - a.publishCount);
 
- const fullRotations = posts.length ? Math.floor(totalPublications / posts.length) : 0;
- const partialPublications = posts.length ? totalPublications % posts.length : 0;
+ let equalRotations = true;
+ if (perPost.length) {
+  const normalizedShares = perPost.map((row) => row.publishCount / Math.max(1, row.weight));
+  const maxShare = Math.max(...normalizedShares);
+  const minShare = Math.min(...normalizedShares);
+  equalRotations = (maxShare - minShare) <= 1;
+ }
 
- const suggestions = posts.length ? {
+ const suggestions = perPost.length ? {
   overall: {
    scheduleTime: config.scheduleTime,
    runtimeEndTime: config.runtimeEndTime,
    minIntervalMinutes: config.minIntervalMinutes,
    rotationGapMinutes: config.rotationGapMinutes,
-   expectedPublications: totalPublications,
-   expectedFullRotations: fullRotations
+   expectedPublications: plan.totalPublications,
+   expectedFullRotations: plan.fullRotations
   }
  } : {};
 
@@ -595,13 +746,16 @@ function calculateScheduleForecast(date, posts, config) {
    rotationGapMinutes: config.rotationGapMinutes
   },
   totals: {
-   windowStartTime: config.scheduleTime,
-   windowEndTime: config.runtimeEndTime,
-   activePosts: posts.length,
-   totalPublications,
-   fullRotations,
-   partialPublications,
-   equalRotations: posts.length ? partialPublications === 0 : true
+   windowStartTime: minutesToTimeString(plan.windowStartMinutes) || config.scheduleTime,
+   windowEndTime: minutesToTimeString(plan.windowEndMinutes) || config.runtimeEndTime,
+   activePosts: perPost.length,
+   totalWeight: plan.totalWeight,
+   totalPublications: plan.totalPublications,
+   fullRotations: plan.fullRotations,
+   partialPublications: plan.partialPublications,
+   equalRotations,
+   rotationCursorStart: plan.startCursor,
+   rotationCursorEnd: plan.endCursor
   },
   perPost,
   publishDistribution,
@@ -609,7 +763,7 @@ function calculateScheduleForecast(date, posts, config) {
  };
 }
 
-function generateDailySchedule(date, startFromNow = true) {
+function generateDailySchedule(date, startFromNow = true, options = {}) {
  const targetDate = date || new Date().toISOString().slice(0, 10);
  const settings = getSchedulerSettings();
  const posts = getActiveTelegramPostsForDate(targetDate);
@@ -621,34 +775,31 @@ function generateDailySchedule(date, startFromNow = true) {
  db.prepare(`DELETE FROM schedule_items WHERE scheduledAt >= ? AND scheduledAt <= ? AND status = 'pending'`)
   .run(dayStart, dayEnd);
 
- const defaultMinutes = timeToMinutes(settings.scheduleTime) ?? 9 * 60;
- const isToday = targetDate === new Date().toISOString().slice(0, 10);
- const now = new Date();
- const nowMinutes = isToday ? now.getHours() * 60 + now.getMinutes() : null;
- const baseMinutes = startFromNow && isToday && nowMinutes !== null ? nowMinutes : null;
- const minInterval = Math.max(1, settings.minIntervalMinutes);
-
- const items = posts.map((post) => {
-  const desired = timeToMinutes(post.preferredTime) ?? defaultMinutes;
-  return { post, desired };
- }).sort((a, b) => a.desired - b.desired || a.post.id - b.post.id);
-
- let lastAssigned = baseMinutes !== null ? baseMinutes - minInterval : -Infinity;
+ const plan = buildRuntimePlan(targetDate, posts, settings, {
+  startFromNow,
+  startCursor: options.startCursor
+ });
  const createdAt = new Date().toISOString();
- let scheduled = 0;
-
- for (const entry of items) {
-  let target = entry.desired;
-  if (baseMinutes !== null) target = Math.max(target, baseMinutes);
-  const assigned = Math.max(target, lastAssigned + minInterval);
-  lastAssigned = assigned;
-  const scheduledAt = minutesToIso(targetDate, assigned);
+ for (const slot of plan.slots) {
+  const scheduledAt = minutesToIso(targetDate, slot.minutes);
   db.prepare(`INSERT INTO schedule_items (postId, scheduledAt, status, createdAt) VALUES (?,?,?,?)`)
-   .run(entry.post.id, scheduledAt, 'pending', createdAt);
-  scheduled += 1;
+   .run(slot.post.id, scheduledAt, 'pending', createdAt);
  }
 
- return { date: targetDate, total: posts.length, scheduled };
+ if (options.advanceCursor !== false && plan.sequenceLength) {
+  storeRotationCursor(plan.endCursor, targetDate, plan.sequenceLength);
+ }
+
+ return {
+  date: targetDate,
+  total: posts.length,
+  scheduled: plan.totalPublications,
+  rotationSize: plan.sequenceLength,
+  startCursor: plan.startCursor,
+  endCursor: plan.endCursor,
+  windowStartTime: minutesToTimeString(plan.windowStartMinutes),
+  windowEndTime: minutesToTimeString(plan.windowEndMinutes)
+ };
 }
 
 let scheduleProcessing = false;
@@ -657,12 +808,12 @@ async function processDueSchedule(force = false) {
  scheduleProcessing = true;
  try {
   const settings = getSchedulerSettings();
-  const minIntervalMs = Math.max(1, settings.minIntervalMinutes) * 60 * 1000;
-  const lastSentAt = getSetting('lastSentAt');
-  if (lastSentAt) {
-   const delta = Date.now() - new Date(lastSentAt).getTime();
-   if (delta < minIntervalMs) return;
-  }
+ const minIntervalMs = Math.max(1, settings.minIntervalMinutes) * 60 * 1000;
+ const lastSentAt = getSetting('lastSentAt');
+ if (!force && lastSentAt) {
+  const delta = Date.now() - new Date(lastSentAt).getTime();
+  if (delta < minIntervalMs) return;
+ }
 
   const nowIso = nowLocalIso();
   const item = db.prepare(`
@@ -771,7 +922,8 @@ db.prepare(`CREATE TABLE IF NOT EXISTS companies (
  name TEXT,
  telegramChannelId TEXT,
  telegramPublicUrl TEXT,
- preferredTime TEXT
+ preferredTime TEXT,
+ premium INTEGER DEFAULT 0
 )`).run();
 
 db.prepare(`CREATE TABLE IF NOT EXISTS posts (
@@ -855,6 +1007,7 @@ db.prepare(`CREATE TABLE IF NOT EXISTS settings (
 ensureColumn('companies', 'telegramChannelId', 'TEXT');
 ensureColumn('companies', 'telegramPublicUrl', 'TEXT');
 ensureColumn('companies', 'preferredTime', 'TEXT');
+ensureColumn('companies', 'premium', 'INTEGER DEFAULT 0');
 
 ensureColumn('posts', 'draftId', 'INTEGER');
 ensureColumn('posts', 'ctaUrl', 'TEXT');
@@ -902,6 +1055,10 @@ app.get('/settings', (_, res) => {
 app.put('/settings', (req, res) => {
  const currentSettings = getSchedulerSettings();
  const scheduleEnabled = req.body?.scheduleEnabled;
+ const runNow = req.body?.runNow === 1 || req.body?.runNow === true || req.body?.runNow === '1';
+ const runDateInput = String(req.body?.runDate || '').trim();
+ const runDate = runDateInput || new Date().toISOString().slice(0, 10);
+ if (runNow && !isValidDateString(runDate)) return badRequest(res, 'Invalid run date');
  const scheduleTime = normalizeTime(req.body?.scheduleTime);
  const runtimeEndTimeInput = req.body?.runtimeEndTime;
  const runtimeEndTime = hasNonEmptyValue(runtimeEndTimeInput)
@@ -934,7 +1091,12 @@ app.put('/settings', (req, res) => {
  setSetting('rotationGapMinutes', String(Math.floor(rotationGapMinutesRaw)));
 
  configureScheduleJob();
- res.send({ ok: true });
+ let runNowResult = null;
+ if (runNow) {
+  runNowResult = generateDailySchedule(runDate, true, { advanceCursor: true });
+  processDueSchedule(true).catch((e) => console.log('Settings run-now failed:', e.message));
+ }
+ res.send({ ok: true, runNowResult });
 });
 
 app.get('/r/:code', (req, res) => {
@@ -961,20 +1123,22 @@ app.get('/companies', (_, res) => res.send(db.prepare(`
   companies.id,
   companies.name,
   companies.preferredTime,
+  COALESCE(companies.premium, 0) as premium,
   (SELECT COUNT(*) FROM posts WHERE posts.companyId = companies.id AND posts.platform = 'telegram') as postCount
  FROM companies
- ORDER BY companies.id DESC
+ ORDER BY LOWER(companies.name) ASC, companies.id ASC
 `).all()));
 
 app.post('/companies', (req, res) => {
  const name = normalizeText(req.body.name);
  if (!name) return badRequest(res, 'Company name is required');
  const preferredTime = normalizeTime(req.body.preferredTime);
+ const premium = normalizePremiumFlag(req.body.premium);
  if (req.body.preferredTime && !preferredTime) return badRequest(res, 'Invalid preferred time');
 
- db.prepare(`INSERT INTO companies (name, preferredTime)
-  VALUES (?,?)
- `).run(name, preferredTime);
+ db.prepare(`INSERT INTO companies (name, preferredTime, premium)
+  VALUES (?,?,?)
+ `).run(name, preferredTime, premium);
  res.send({ ok: true });
 });
 
@@ -984,12 +1148,13 @@ app.put('/companies/:id', (req, res) => {
  const name = normalizeText(req.body.name);
  if (!name) return badRequest(res, 'Company name is required');
  const preferredTime = normalizeTime(req.body.preferredTime);
+ const premium = normalizePremiumFlag(req.body.premium);
  if (req.body.preferredTime && !preferredTime) return badRequest(res, 'Invalid preferred time');
 
  db.prepare(`UPDATE companies SET
-  name=?, preferredTime=?
+  name=?, preferredTime=?, premium=?
   WHERE id=?
- `).run(name, preferredTime, id);
+ `).run(name, preferredTime, premium, id);
  res.send({ ok: true });
 });
 
@@ -1019,6 +1184,7 @@ app.get('/posts', (_, res) => {
    posts.linkId,
    posts.buttons,
    companies.name as companyName,
+   COALESCE(companies.premium, 0) as companyPremium,
    drafts.mediaType as draftMediaType,
    drafts.text as draftText,
    drafts.caption as draftCaption,
@@ -1031,7 +1197,7 @@ app.get('/posts', (_, res) => {
   LEFT JOIN drafts ON posts.draftId = drafts.id
   LEFT JOIN links ON posts.linkId = links.id
   WHERE posts.platform = 'telegram'
-  ORDER BY posts.id DESC
+  ORDER BY LOWER(companies.name) ASC, posts.id ASC
  `).all();
  const enriched = rows.map((row) => ({
   ...row,
@@ -1202,8 +1368,9 @@ app.post('/posts/:id/renew', (req, res) => {
 app.post('/schedule/run', async (req, res) => {
  const date = req.body?.date;
  if (date && !isValidDateString(date)) return badRequest(res, 'Invalid date format');
+ const startFromNow = !(req.body?.startFromNow === 0 || req.body?.startFromNow === false || req.body?.startFromNow === '0');
  try {
-  const result = generateDailySchedule(date, true);
+  const result = generateDailySchedule(date, startFromNow, { advanceCursor: true });
   processDueSchedule(true).catch((e) => console.log('Manual schedule send failed:', e.message));
   res.send({ ok: true, result });
  } catch (e) {
@@ -1221,11 +1388,13 @@ app.get('/schedule/forecast', (req, res) => {
  const endTimeRaw = req.query?.endTime;
  const minIntervalRaw = req.query?.minIntervalMinutes;
  const rotationGapRaw = req.query?.rotationGapMinutes;
+ const startFromNowRaw = req.query?.startFromNow;
 
  const hasStartTime = hasNonEmptyValue(startTimeRaw);
  const hasEndTime = hasNonEmptyValue(endTimeRaw);
  const hasMinInterval = hasNonEmptyValue(minIntervalRaw);
  const hasRotationGap = hasNonEmptyValue(rotationGapRaw);
+ const startFromNow = startFromNowRaw === '1' || startFromNowRaw === 1 || startFromNowRaw === true || startFromNowRaw === 'true';
 
  const scheduleTime = hasStartTime ? normalizeTime(startTimeRaw) : settings.scheduleTime;
  const runtimeEndTime = hasEndTime ? normalizeTime(endTimeRaw) : settings.runtimeEndTime;
@@ -1254,7 +1423,7 @@ app.get('/schedule/forecast', (req, res) => {
   rotationGapMinutes: Math.floor(rotationGapMinutes)
  };
  const posts = getActiveTelegramPostsForDate(targetDate);
- res.send(calculateScheduleForecast(targetDate, posts, forecastConfig));
+ res.send(calculateScheduleForecast(targetDate, posts, forecastConfig, { startFromNow }));
 });
 
 app.get('/schedule/items', (req, res) => {
@@ -1270,6 +1439,7 @@ app.get('/schedule/items', (req, res) => {
    posts.buttons as buttons,
    posts.draftId as draftId,
    drafts.mediaType as draftMediaType,
+   COALESCE(companies.premium, 0) as companyPremium,
    companies.name as companyName
  FROM schedule_items
  JOIN posts ON schedule_items.postId = posts.id

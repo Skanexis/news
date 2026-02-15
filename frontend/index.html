@@ -1190,13 +1190,59 @@
 
     .posts-toolbar {
       display: grid;
-      grid-template-columns: minmax(220px, 1fr) auto;
+      grid-template-columns: repeat(2, minmax(180px, 1fr)) auto;
       gap: 10px;
       align-items: end;
     }
 
     .posts-toolbar .field {
       margin: 0;
+    }
+
+    .companies-toolbar {
+      grid-template-columns: minmax(220px, 1fr);
+    }
+
+    .posts-toolbar input {
+      width: 100%;
+    }
+
+    .list-pagination {
+      margin-top: 10px;
+      border: 1px solid rgba(124, 136, 179, 0.25);
+      border-radius: var(--radius-sm);
+      background: rgba(8, 12, 26, 0.5);
+      padding: 8px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .list-pagination .pagination-summary {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .list-pagination .pagination-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .premium-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      border: 1px solid rgba(255, 179, 71, 0.45);
+      background: rgba(30, 22, 14, 0.8);
+      color: var(--warning);
+      white-space: nowrap;
     }
 
     .posts-by-company-list {
@@ -1818,7 +1864,10 @@
               <input type="number" id="rotationGapMinutes" min="0" step="1">
             </label>
           </div>
-          <button class="btn primary full" id="saveSettingsBtn">Salva Impostazioni</button>
+          <div class="row">
+            <button class="btn primary" id="saveSettingsBtn">Salva Impostazioni</button>
+            <button class="btn ghost" id="saveRunNowBtn" type="button">Salva + Avvia Oggi</button>
+          </div>
           <p class="hint">Quando termina una rotazione completa, il sistema applica l'intervallo extra prima di iniziare la successiva.</p>
           <div id="schedulerForecast" class="scheduler-forecast"></div>
         </div>
@@ -1840,10 +1889,23 @@
                 <button class="time-trigger" type="button" aria-label="Apri selettore orario"></button>
               </div>
             </label>
+            <div class="field span-6">
+              <span>Tipo rotazione</span>
+              <label class="check">
+                <input type="checkbox" id="companyPremium">
+                <span>Premium x1.5</span>
+              </label>
+            </div>
           </div>
           <div class="row">
             <button class="btn primary" id="saveCompanyBtn">Salva Azienda</button>
             <button class="btn ghost" id="clearCompanyBtn">Pulisci</button>
+          </div>
+          <div class="posts-toolbar companies-toolbar">
+            <label class="field">
+              <span>Cerca azienda</span>
+              <input type="text" id="companiesSearch" placeholder="Nome, ID, orario...">
+            </label>
           </div>
           <div class="table-wrap">
             <table>
@@ -1851,6 +1913,7 @@
                 <tr>
                   <th>ID</th>
                   <th>Nome</th>
+                  <th>Tipo</th>
                   <th>Preferito</th>
                   <th>Post</th>
                   <th>Azioni</th>
@@ -1859,6 +1922,7 @@
               <tbody id="companiesTable"></tbody>
             </table>
           </div>
+          <div id="companiesPagination" class="list-pagination"></div>
         </div>
       </div>
     </section>
@@ -1965,6 +2029,10 @@
               <span>Filtro azienda</span>
               <select id="postsCompanyFilter" class="native-select" data-search="true"></select>
             </label>
+            <label class="field">
+              <span>Cerca post</span>
+              <input type="text" id="postsSearch" placeholder="Azienda, testo, ID...">
+            </label>
             <button class="btn ghost" type="button" id="clearPostsFilterBtn">Mostra tutte</button>
           </div>
           <div id="postsByCompanyList" class="posts-by-company-list"></div>
@@ -1982,6 +2050,7 @@
               <tbody id="postsTable"></tbody>
             </table>
           </div>
+          <div id="postsPagination" class="list-pagination"></div>
         </div>
 
         <div class="panel span-5">
@@ -2079,17 +2148,24 @@
       postEditId: null,
       scheduleDate: new Date().toISOString().slice(0, 10),
       draftSearch: '',
-      postsCompanyFilter: ''
+      companiesSearch: '',
+      postsSearch: '',
+      postsCompanyFilter: '',
+      companiesPage: 1,
+      postsPage: 1
     };
     const POST_DRAFT_STORAGE_KEY = 'yosupport_post_form_draft_v1';
     const POST_DRAFT_STORAGE_VERSION = 1;
     const POST_DRAFT_DEBOUNCE_MS = 250;
     const MAX_POST_BUTTONS = 8;
     const MAX_POST_BUTTON_TEXT_LENGTH = 64;
+    const COMPANIES_PAGE_SIZE = 12;
+    const POSTS_PAGE_SIZE = 14;
     const API_AUTH_STORAGE_KEY = 'yosupport_api_basic_auth_v1';
     let postDraftRestoreDone = false;
     let savingPost = false;
     let savingCompany = false;
+    let savingSettings = false;
     let apiAuthToken = loadApiAuthToken();
     let authInProgress = false;
 
@@ -2115,12 +2191,16 @@
       minIntervalMinutes: byId('minIntervalMinutes'),
       rotationGapMinutes: byId('rotationGapMinutes'),
       saveSettingsBtn: byId('saveSettingsBtn'),
+      saveRunNowBtn: byId('saveRunNowBtn'),
       schedulerForecast: byId('schedulerForecast'),
       companyName: byId('companyName'),
       companyPreferredTime: byId('companyPreferredTime'),
+      companyPremium: byId('companyPremium'),
       saveCompanyBtn: byId('saveCompanyBtn'),
       clearCompanyBtn: byId('clearCompanyBtn'),
+      companiesSearch: byId('companiesSearch'),
       companiesTable: byId('companiesTable'),
+      companiesPagination: byId('companiesPagination'),
       companiesPanel: byId('companiesPanel'),
       draftsPanel: byId('draftsPanel'),
       pullDraftsBtn: byId('pullDraftsBtn'),
@@ -2144,9 +2224,11 @@
       savePostBtn: byId('savePostBtn'),
       clearPostBtn: byId('clearPostBtn'),
       postsTable: byId('postsTable'),
+      postsSearch: byId('postsSearch'),
       postsCompanyFilter: byId('postsCompanyFilter'),
       clearPostsFilterBtn: byId('clearPostsFilterBtn'),
       postsByCompanyList: byId('postsByCompanyList'),
+      postsPagination: byId('postsPagination'),
       postComposerPanel: byId('postComposerPanel'),
       scheduleDate: byId('scheduleDate'),
       scheduleTable: byId('scheduleTable'),
@@ -3212,10 +3294,80 @@
       };
     }
 
+    function normalizeSearchText(value) {
+      return String(value || '').trim().toLowerCase();
+    }
+
+    function sortCompaniesAlphabetically(companies) {
+      return [...(companies || [])].sort((a, b) => {
+        const byName = String(a?.name || '').localeCompare(String(b?.name || ''), 'it', { sensitivity: 'base' });
+        if (byName) return byName;
+        return Number(a?.id || 0) - Number(b?.id || 0);
+      });
+    }
+
+    function sortPostsAlphabetically(posts) {
+      return [...(posts || [])].sort((a, b) => {
+        const byCompany = String(a?.companyName || '').localeCompare(String(b?.companyName || ''), 'it', { sensitivity: 'base' });
+        if (byCompany) return byCompany;
+        return Number(a?.id || 0) - Number(b?.id || 0);
+      });
+    }
+
+    function paginateRows(items, page, pageSize) {
+      const normalizedSize = Math.max(1, Number(pageSize || 1));
+      const totalItems = items.length;
+      const totalPages = Math.max(1, Math.ceil(totalItems / normalizedSize));
+      const currentPage = Math.min(Math.max(1, Number(page || 1)), totalPages);
+      const start = (currentPage - 1) * normalizedSize;
+      return {
+        page: currentPage,
+        totalPages,
+        totalItems,
+        pageSize: normalizedSize,
+        from: totalItems ? start + 1 : 0,
+        to: Math.min(start + normalizedSize, totalItems),
+        items: items.slice(start, start + normalizedSize)
+      };
+    }
+
+    function getFilteredCompanies() {
+      const query = normalizeSearchText(state.companiesSearch);
+      const sorted = sortCompaniesAlphabetically(state.companies);
+      if (!query) return sorted;
+      return sorted.filter((company) => {
+        const haystack = [
+          company.id,
+          company.name,
+          company.preferredTime,
+          Number(company.premium) === 1 ? 'premium' : 'standard'
+        ].map((value) => String(value || '').toLowerCase()).join(' ');
+        return haystack.includes(query);
+      });
+    }
+
     function getFilteredPosts() {
       const selectedCompanyId = Number(state.postsCompanyFilter || 0);
-      if (!selectedCompanyId) return [...state.posts];
-      return state.posts.filter((post) => Number(post.companyId) === selectedCompanyId);
+      const query = normalizeSearchText(state.postsSearch);
+      const sortedPosts = sortPostsAlphabetically(state.posts);
+      return sortedPosts.filter((post) => {
+        if (selectedCompanyId && Number(post.companyId) !== selectedCompanyId) return false;
+        if (!query) return true;
+        const content = summarizePostContent(post);
+        const haystack = [
+          post.id,
+          post.companyName,
+          post.startDate,
+          post.endDate,
+          content.label,
+          content.preview,
+          post.text,
+          post.draftCaption,
+          post.draftText,
+          Number(post.companyPremium) === 1 ? 'premium' : 'standard'
+        ].map((value) => String(value || '').toLowerCase()).join(' ');
+        return haystack.includes(query);
+      });
     }
 
     async function loadAll() {
@@ -3371,12 +3523,39 @@
       `;
     }
 
+    function renderPagination(container, pagination, target) {
+      if (!container || !pagination) return;
+      if (!pagination.totalItems) {
+        container.innerHTML = '<div class="pagination-summary">Nessun elemento da mostrare.</div>';
+        return;
+      }
+      const summary = `Mostrati ${pagination.from}-${pagination.to} di ${pagination.totalItems}`;
+      container.innerHTML = `
+        <div class="pagination-summary">${escapeHtml(summary)}</div>
+        <div class="pagination-actions">
+          <button class="btn xs ghost" type="button" data-action="page-prev" data-target="${escapeHtml(target)}" ${pagination.page <= 1 ? 'disabled' : ''}>Prev</button>
+          <span class="muted">Pagina ${escapeHtml(String(pagination.page))}/${escapeHtml(String(pagination.totalPages))}</span>
+          <button class="btn xs ghost" type="button" data-action="page-next" data-target="${escapeHtml(target)}" ${pagination.page >= pagination.totalPages ? 'disabled' : ''}>Next</button>
+        </div>
+      `;
+    }
+
     function renderCompanies() {
-      els.companiesTable.innerHTML = state.companies.map((company) => {
+      const filteredCompanies = getFilteredCompanies();
+      const pagination = paginateRows(filteredCompanies, state.companiesPage, COMPANIES_PAGE_SIZE);
+      state.companiesPage = pagination.page;
+      if (els.companiesSearch && els.companiesSearch.value !== state.companiesSearch) {
+        els.companiesSearch.value = state.companiesSearch;
+      }
+      els.companiesTable.innerHTML = pagination.items.map((company) => {
+        const tier = Number(company.premium) === 1
+          ? '<span class="premium-tag">Premium x1.5</span>'
+          : '<span class="muted">Standard</span>';
         return `
           <tr>
             <td>#${company.id}</td>
             <td>${escapeHtml(company.name)}</td>
+            <td>${tier}</td>
             <td>${escapeHtml(company.preferredTime || '-')}</td>
             <td>${company.postCount || 0}</td>
             <td>
@@ -3387,20 +3566,22 @@
             </td>
           </tr>
         `;
-      }).join('') || '<tr><td colspan="5" class="muted">Nessuna azienda presente.</td></tr>';
+      }).join('') || '<tr><td colspan="6" class="muted">Nessuna azienda presente.</td></tr>';
+      renderPagination(els.companiesPagination, pagination, 'companies');
 
-      els.postCompany.innerHTML = '<option value="">Seleziona azienda</option>' + state.companies.map((company) => (
+      const sortedCompanies = sortCompaniesAlphabetically(state.companies);
+      els.postCompany.innerHTML = '<option value="">Seleziona azienda</option>' + sortedCompanies.map((company) => (
         `<option value="${company.id}">${escapeHtml(company.name)}</option>`
       )).join('');
       refreshCustomSelect(els.postCompany);
 
       const selectedFilter = String(state.postsCompanyFilter || '');
       const filterOptions = ['<option value="">Tutte le aziende</option>']
-        .concat(state.companies.map((company) => (
+        .concat(sortedCompanies.map((company) => (
           `<option value="${company.id}">${escapeHtml(company.name)}</option>`
         )));
       els.postsCompanyFilter.innerHTML = filterOptions.join('');
-      const hasSelectedFilter = !selectedFilter || state.companies.some((company) => String(company.id) === selectedFilter);
+      const hasSelectedFilter = !selectedFilter || sortedCompanies.some((company) => String(company.id) === selectedFilter);
       state.postsCompanyFilter = hasSelectedFilter ? selectedFilter : '';
       els.postsCompanyFilter.value = state.postsCompanyFilter;
       refreshCustomSelect(els.postsCompanyFilter);
@@ -3475,14 +3656,15 @@
 
     function renderPostsByCompany(posts) {
       const selectedCompanyId = Number(state.postsCompanyFilter || 0);
+      const sortedCompanies = sortCompaniesAlphabetically(state.companies);
       const availableCompanies = selectedCompanyId
-        ? state.companies.filter((company) => Number(company.id) === selectedCompanyId)
-        : state.companies;
+        ? sortedCompanies.filter((company) => Number(company.id) === selectedCompanyId)
+        : sortedCompanies;
 
       const cards = availableCompanies.map((company) => {
         const companyPosts = posts.filter((post) => Number(post.companyId) === Number(company.id));
         if (!companyPosts.length) return '';
-        const previewItems = companyPosts.slice(0, 4).map((post) => {
+        const previewItems = companyPosts.slice(0, 3).map((post) => {
           const status = getPostStatus(post);
           const content = summarizePostContent(post);
           return `
@@ -3499,16 +3681,17 @@
             </div>
           `;
         }).join('');
-        const extra = companyPosts.length > 4
-          ? `<div class="company-post-meta">+${companyPosts.length - 4} post non mostrati</div>`
+        const extra = companyPosts.length > 3
+          ? `<div class="company-post-meta">+${companyPosts.length - 3} post non mostrati in questa pagina</div>`
           : '';
         const filterButton = selectedCompanyId
           ? '<button class="btn xs ghost" type="button" data-action="posts-clear-filter">Mostra tutte</button>'
           : `<button class="btn xs ghost" type="button" data-action="posts-filter-company" data-id="${company.id}">Solo questa</button>`;
+        const premiumTag = Number(company.premium) === 1 ? '<span class="premium-tag">Premium</span>' : '';
         return `
           <article class="company-post-card">
             <div class="company-post-head">
-              <h4 class="company-post-title">${escapeHtml(company.name)}</h4>
+              <h4 class="company-post-title">${escapeHtml(company.name)} ${premiumTag}</h4>
               <div class="row">
                 <span class="company-post-meta">${companyPosts.length} post</span>
                 ${filterButton}
@@ -3529,7 +3712,13 @@
     }
 
     function renderPosts() {
-      const visiblePosts = getFilteredPosts();
+      const filteredPosts = getFilteredPosts();
+      const pagination = paginateRows(filteredPosts, state.postsPage, POSTS_PAGE_SIZE);
+      state.postsPage = pagination.page;
+      const visiblePosts = pagination.items;
+      if (els.postsSearch && els.postsSearch.value !== state.postsSearch) {
+        els.postsSearch.value = state.postsSearch;
+      }
       renderPostsByCompany(visiblePosts);
 
       els.postsTable.innerHTML = visiblePosts.map((post) => {
@@ -3537,11 +3726,12 @@
         const content = summarizePostContent(post);
         const status = getPostStatus(post);
         const activePill = `<span class="pill ${status.className}">${status.label}</span>`;
+        const premiumTag = Number(post.companyPremium) === 1 ? '<span class="premium-tag">Premium</span>' : '';
         return `
           <tr>
             <td>#${post.id}</td>
             <td>
-              <div>${escapeHtml(post.companyName || '-')}</div>
+              <div>${escapeHtml(post.companyName || '-')} ${premiumTag}</div>
               <div class="muted">${activePill}</div>
             </td>
             <td>
@@ -3561,6 +3751,7 @@
           </tr>
         `;
       }).join('') || '<tr><td colspan="5" class="muted">Nessun post presente.</td></tr>';
+      renderPagination(els.postsPagination, pagination, 'posts');
     }
 
     function renderSchedule() {
@@ -3645,6 +3836,7 @@
       state.companyEditId = null;
       els.companyName.value = '';
       els.companyPreferredTime.value = '';
+      if (els.companyPremium) els.companyPremium.checked = false;
     }
 
     function clearPostForm() {
@@ -3692,23 +3884,38 @@
       updatePostChecklist();
       schedulePostDraftSave();
     }
-    async function saveSettings() {
+    async function saveSettings(runNow = false) {
+      if (savingSettings) return;
+      savingSettings = true;
+      if (els.saveSettingsBtn) els.saveSettingsBtn.disabled = true;
+      if (els.saveRunNowBtn) els.saveRunNowBtn.disabled = true;
       try {
         const payload = {
           scheduleEnabled: els.scheduleEnabled.checked ? 1 : 0,
           scheduleTime: els.scheduleTime.value,
           runtimeEndTime: els.runtimeEndTime.value,
           minIntervalMinutes: Number(els.minIntervalMinutes.value || 0),
-          rotationGapMinutes: Number(els.rotationGapMinutes.value || 0)
+          rotationGapMinutes: Number(els.rotationGapMinutes.value || 0),
+          runNow: runNow ? 1 : 0,
+          runDate: new Date().toISOString().slice(0, 10)
         };
-        await fetchJson('/settings', {
+        const result = await fetchJson('/settings', {
           method: 'PUT',
           body: JSON.stringify(payload)
         });
-        setStatus('Impostazioni salvate.', 'success');
+        if (runNow) {
+          const scheduled = Number(result?.runNowResult?.scheduled || 0);
+          setStatus(`Impostazioni salvate. Runtime avviato ora (${scheduled} invii pianificati).`, 'success');
+        } else {
+          setStatus('Impostazioni salvate.', 'success');
+        }
         await loadAll();
       } catch (err) {
         setStatus(err.message || 'Salvataggio impostazioni fallito.', 'error');
+      } finally {
+        savingSettings = false;
+        if (els.saveSettingsBtn) els.saveSettingsBtn.disabled = false;
+        if (els.saveRunNowBtn) els.saveRunNowBtn.disabled = false;
       }
     }
 
@@ -3716,7 +3923,8 @@
       if (savingCompany) return;
       const payload = {
         name: els.companyName.value.trim(),
-        preferredTime: els.companyPreferredTime.value || null
+        preferredTime: els.companyPreferredTime.value || null,
+        premium: els.companyPremium.checked ? 1 : 0
       };
       if (!payload.name) {
         setStatus('Il nome azienda è obbligatorio.', 'error');
@@ -3892,11 +4100,29 @@
       const normalized = Number(companyId || 0);
       const value = normalized > 0 ? String(normalized) : '';
       state.postsCompanyFilter = value;
+      state.postsPage = 1;
       if (els.postsCompanyFilter.value !== value) {
         els.postsCompanyFilter.value = value;
       }
       refreshCustomSelect(els.postsCompanyFilter);
       renderPosts();
+    }
+
+    function handlePaginationAction(target, action) {
+      if (!target || !action) return;
+      if (target === 'companies') {
+        const totalPages = paginateRows(getFilteredCompanies(), state.companiesPage, COMPANIES_PAGE_SIZE).totalPages;
+        if (action === 'page-prev') state.companiesPage = Math.max(1, state.companiesPage - 1);
+        if (action === 'page-next') state.companiesPage = Math.min(totalPages, state.companiesPage + 1);
+        renderCompanies();
+        return;
+      }
+      if (target === 'posts') {
+        const totalPages = paginateRows(getFilteredPosts(), state.postsPage, POSTS_PAGE_SIZE).totalPages;
+        if (action === 'page-prev') state.postsPage = Math.max(1, state.postsPage - 1);
+        if (action === 'page-next') state.postsPage = Math.min(totalPages, state.postsPage + 1);
+        renderPosts();
+      }
     }
 
     function handlePostAction(action, id) {
@@ -3926,9 +4152,19 @@
       clearPostForm();
       focusPanel(els.postComposerPanel, els.postStartDate);
     });
-    els.saveSettingsBtn.addEventListener('click', saveSettings);
+    els.saveSettingsBtn.addEventListener('click', () => saveSettings(false));
+    if (els.saveRunNowBtn) {
+      els.saveRunNowBtn.addEventListener('click', () => saveSettings(true));
+    }
     els.saveCompanyBtn.addEventListener('click', saveCompany);
     els.clearCompanyBtn.addEventListener('click', clearCompanyForm);
+    if (els.companiesSearch) {
+      els.companiesSearch.addEventListener('input', () => {
+        state.companiesSearch = els.companiesSearch.value || '';
+        state.companiesPage = 1;
+        renderCompanies();
+      });
+    }
     els.pullDraftsBtn.addEventListener('click', syncDrafts);
     els.refreshDraftsBtn.addEventListener('click', loadAll);
     els.savePostBtn.addEventListener('click', savePost);
@@ -3948,9 +4184,32 @@
     els.postsCompanyFilter.addEventListener('change', () => {
       setPostsCompanyFilter(Number(els.postsCompanyFilter.value || 0));
     });
+    if (els.postsSearch) {
+      els.postsSearch.addEventListener('input', () => {
+        state.postsSearch = els.postsSearch.value || '';
+        state.postsPage = 1;
+        renderPosts();
+      });
+    }
     els.clearPostsFilterBtn.addEventListener('click', () => {
       setPostsCompanyFilter(0);
     });
+    if (els.companiesPagination) {
+      els.companiesPagination.addEventListener('click', (event) => {
+        const action = event.target?.dataset?.action;
+        const target = event.target?.dataset?.target;
+        if (!action || !target) return;
+        handlePaginationAction(target, action);
+      });
+    }
+    if (els.postsPagination) {
+      els.postsPagination.addEventListener('click', (event) => {
+        const action = event.target?.dataset?.action;
+        const target = event.target?.dataset?.target;
+        if (!action || !target) return;
+        handlePaginationAction(target, action);
+      });
+    }
     const scheduleForecastPreview = debounce(() => {
       loadSchedulerForecast({ silent: true, useFormValues: true });
     }, 260);
@@ -4069,6 +4328,7 @@
         state.companyEditId = company.id;
         els.companyName.value = company.name || '';
         els.companyPreferredTime.value = company.preferredTime || '';
+        els.companyPremium.checked = Number(company.premium) === 1;
         setStatus(`Modifica azienda #${company.id}`, 'success');
         focusPanel(els.companiesPanel, els.companyName);
       }

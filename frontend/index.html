@@ -1061,6 +1061,23 @@
       font-size: 12px;
     }
 
+    .forecast-table-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .forecast-table-head .forecast-block-title {
+      margin: 0;
+    }
+
+    .forecast-table-wrap {
+      max-height: 320px;
+      overflow: auto;
+    }
+
     .forecast-table th,
     .forecast-table td {
       padding: 8px 10px;
@@ -1512,6 +1529,10 @@
       font-size: 11px;
       padding: 4px 7px;
       min-width: 74px;
+    }
+
+    body[data-density="compact"] .forecast-table-wrap {
+      max-height: 250px;
     }
 
     body[data-density="compact"] .list-pagination {
@@ -2479,6 +2500,7 @@
       companyPostsExpanded: {},
       companyPostsPage: {},
       companyPostsPageSizeByCompany: {},
+      schedulerForecastPerPostExpanded: false,
       uiDensity: loadUiDensity()
     };
     const POST_DRAFT_STORAGE_KEY = 'yosupport_post_form_draft_v1';
@@ -2492,6 +2514,7 @@
     const COMPANY_POST_PREVIEW_DEFAULT = 3;
     const COMPANY_POST_PREVIEW_STEP = 5;
     const COMPANY_POSTS_PAGE_SIZE_DEFAULT = 4;
+    const SCHEDULER_FORECAST_PER_POST_LIMIT = 12;
     const API_AUTH_STORAGE_KEY = 'yosupport_api_basic_auth_v1';
     let postDraftRestoreDone = false;
     let savingPost = false;
@@ -3881,7 +3904,26 @@
         ? `${suggestions.startTime.scheduleTime} (${suggestions.startTime.expectedPublications} invii, ${suggestions.startTime.expectedFullRotations} rotazioni complete)`
         : 'Nessun orario avvio valido per rotazioni complete.';
 
-      const perPostRows = perPost.map((row) => `
+      const sortedPerPost = [...perPost].sort((a, b) => {
+        const byCount = Number(b?.publishCount || 0) - Number(a?.publishCount || 0);
+        if (byCount) return byCount;
+        return String(a?.companyName || '').localeCompare(String(b?.companyName || ''), 'it', { sensitivity: 'base' });
+      });
+      const isPerPostExpanded = Boolean(state.schedulerForecastPerPostExpanded);
+      const visiblePerPost = isPerPostExpanded
+        ? sortedPerPost
+        : sortedPerPost.slice(0, SCHEDULER_FORECAST_PER_POST_LIMIT);
+      const hiddenPerPostCount = Math.max(0, sortedPerPost.length - visiblePerPost.length);
+      const perPostSummaryText = sortedPerPost.length
+        ? isPerPostExpanded
+          ? `Mostrati tutti: ${sortedPerPost.length}`
+          : `Mostrati ${visiblePerPost.length} di ${sortedPerPost.length}`
+        : 'Nessun post attivo.';
+      const perPostToggleButton = sortedPerPost.length > SCHEDULER_FORECAST_PER_POST_LIMIT
+        ? `<button class="btn xs ghost" type="button" data-action="forecast-perpost-toggle">${isPerPostExpanded ? 'Mostra meno' : `Mostra tutti (+${hiddenPerPostCount})`}</button>`
+        : '';
+
+      const perPostRows = visiblePerPost.map((row) => `
         <tr>
           <td>${escapeHtml(row.companyName || `#${row.postId}`)}</td>
           <td>${escapeHtml(String(row.publishCount || 0))}</td>
@@ -3932,8 +3974,14 @@
           <div class="forecast-text">Solo avvio runtime: ${escapeHtml(suggestionStart)}</div>
         </div>
         <div class="forecast-block forecast-table">
-          <h4 class="forecast-block-title">Invii Previsti Per Post</h4>
-          <div class="table-wrap">
+          <div class="forecast-table-head">
+            <h4 class="forecast-block-title">Invii Previsti Per Post</h4>
+            <div class="row">
+              <span class="muted">${escapeHtml(perPostSummaryText)}</span>
+              ${perPostToggleButton}
+            </div>
+          </div>
+          <div class="table-wrap forecast-table-wrap">
             <table>
               <thead>
                 <tr>
@@ -5264,6 +5312,16 @@
         }
         if (action === 'schedule-post-publish') {
           handlePostAction('post-publish', id);
+        }
+      });
+    }
+
+    if (els.schedulerForecast) {
+      els.schedulerForecast.addEventListener('click', (event) => {
+        const action = event.target?.dataset?.action;
+        if (action === 'forecast-perpost-toggle') {
+          state.schedulerForecastPerPostExpanded = !state.schedulerForecastPerPostExpanded;
+          renderSchedulerForecast();
         }
       });
     }

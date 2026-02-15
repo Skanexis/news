@@ -1627,6 +1627,11 @@ markInvalidPendingScheduleItems();
 reclaimStaleProcessingItems(15);
 
 app.get('/health', (_, res) => res.send({ ok: true }));
+app.get('/runtime/time', (_, res) => res.send({
+ currentDate: getCurrentDateString(),
+ nowLocalIso: nowLocalIso(),
+ cronTimeZone: CRON_TZ || null
+}));
 
 app.get('/settings', (_, res) => {
  const settings = getSchedulerSettings();

@@ -2535,7 +2535,9 @@
       settings: null,
       companyEditId: null,
       postEditId: null,
-      scheduleDate: new Date().toISOString().slice(0, 10),
+      runtimeDate: '',
+      scheduleDate: formatIsoDate(new Date()),
+      scheduleDatePinnedToToday: true,
       draftSearch: '',
       companiesSearch: '',
       companiesTypeFilter: '',
@@ -2569,11 +2571,13 @@
     const COMPANY_POST_PREVIEW_STEP = 5;
     const COMPANY_POSTS_PAGE_SIZE_DEFAULT = 4;
     const SCHEDULER_FORECAST_PER_POST_LIMIT = 12;
+    const LIVE_RUNTIME_REFRESH_MS = 30000;
     const API_AUTH_STORAGE_KEY = 'yosupport_api_basic_auth_v1';
     let postDraftRestoreDone = false;
     let savingPost = false;
     let savingCompany = false;
     let savingSettings = false;
+    let liveRuntimeRefreshInFlight = false;
     let apiAuthToken = loadApiAuthToken();
     let authInProgress = false;
 
@@ -3248,6 +3252,11 @@
       return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
     }
 
+    function getTodayDateKey() {
+      if (isValidDateString(state.runtimeDate)) return state.runtimeDate;
+      return formatIsoDate(new Date());
+    }
+
     function maybeAutoAdjustPostEndDate() {
       const start = els.postStartDate.value.trim();
       if (!isValidDateString(start)) return;
@@ -3259,7 +3268,7 @@
     }
 
     function applyPostDatePreset(days) {
-      const today = formatIsoDate(new Date());
+      const today = getTodayDateKey();
       const base = isValidDateString(els.postStartDate.value) ? els.postStartDate.value : today;
       els.postStartDate.value = base;
       els.postEndDate.value = addDaysToIsoDate(base, days);
@@ -3335,7 +3344,7 @@
         const daysInMonth = new Date(year, month + 1, 0).getDate();
         const daysPrev = new Date(year, month, 0).getDate();
 
-        const todayKey = formatIsoDate(new Date());
+        const todayKey = getTodayDateKey();
         const selectedKey = selected ? formatIsoDate(selected) : null;
 
         for (let i = 0; i < 42; i += 1) {
@@ -3683,6 +3692,17 @@
       return data;
     }
 
+    async function syncRuntimeDate() {
+      try {
+        const runtimeTime = await fetchJson('/runtime/time');
+        const runtimeDate = isValidDateString(runtimeTime?.currentDate) ? runtimeTime.currentDate : '';
+        if (runtimeDate) {
+          state.runtimeDate = runtimeDate;
+        }
+      } catch (err) {}
+      return getTodayDateKey();
+    }
+
     function translateDeliveryStatus(status) {
       if (status === 'sent') return 'inviato';
       if (status === 'failed') return 'fallito';
@@ -3806,7 +3826,7 @@
       });
     }
 
-    function getPostLifecycle(post, today = new Date().toISOString().slice(0, 10)) {
+    function getPostLifecycle(post, today = getTodayDateKey()) {
       if (!post || Number(post.active) !== 1) return 'paused';
       if (isValidDateString(post.endDate) && post.endDate < today) return 'expired';
       if (isValidDateString(post.startDate) && post.startDate > today) return 'upcoming';
@@ -3817,7 +3837,7 @@
       const selectedCompanyId = Number(state.postsCompanyFilter || 0);
       const query = normalizeSearchText(state.postsSearch);
       const statusFilter = String(state.postsStatusFilter || '').toLowerCase();
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getTodayDateKey();
       const sortedPosts = sortPostsAlphabetically(state.posts);
       return sortedPosts.filter((post) => {
         if (selectedCompanyId && Number(post.companyId) !== selectedCompanyId) return false;
@@ -3871,14 +3891,23 @@
     async function loadAll() {
       setStatus('Caricamento dati...');
       try {
+        await syncRuntimeDate();
+        if (!isValidDateString(state.scheduleDate) || state.scheduleDatePinnedToToday) {
+          state.scheduleDate = getTodayDateKey();
+          state.scheduleDatePinnedToToday = true;
+        }
+        if (els.scheduleDate && els.scheduleDate.value !== state.scheduleDate) {
+          els.scheduleDate.value = state.scheduleDate;
+        }
+        const scheduleDate = state.scheduleDate;
         const [companies, drafts, posts, logs, settings, scheduleItems, schedulerForecast, analytics] = await Promise.all([
           fetchJson('/companies'),
           fetchJson('/drafts'),
           fetchJson('/posts'),
           fetchJson('/logs'),
           fetchJson('/settings'),
-          fetchJson(`/schedule/items?date=${state.scheduleDate}`),
-          fetchJson(`/schedule/forecast?date=${state.scheduleDate}`),
+          fetchJson(`/schedule/items?date=${scheduleDate}`),
+          fetchJson(`/schedule/forecast?date=${scheduleDate}`),
           fetchJson('/analytics/companies')
         ]);
         state.companies = companies || [];
@@ -3926,6 +3955,41 @@
         updateSummary();
       } catch (err) {
         setStatus(err.message || 'Caricamento pianificazione fallito.', 'error');
+      }
+    }
+
+    async function refreshLiveRuntimePanels() {
+      if (liveRuntimeRefreshInFlight) return;
+      liveRuntimeRefreshInFlight = true;
+      try {
+        if (state.scheduleDatePinnedToToday) {
+          await syncRuntimeDate();
+          const today = getTodayDateKey();
+          if (state.scheduleDate !== today) {
+            state.scheduleDate = today;
+            if (els.scheduleDate && els.scheduleDate.value !== today) {
+              els.scheduleDate.value = today;
+            }
+          }
+        }
+        const scheduleDate = state.scheduleDate;
+        const [scheduleItems, schedulerForecast, logs, analytics] = await Promise.all([
+          fetchJson(`/schedule/items?date=${scheduleDate}`),
+          fetchJson(`/schedule/forecast?date=${scheduleDate}`),
+          fetchJson('/logs'),
+          fetchJson('/analytics/companies')
+        ]);
+        state.scheduleItems = scheduleItems || [];
+        state.schedulerForecast = schedulerForecast || null;
+        state.logs = logs || [];
+        state.analytics = analytics || null;
+        renderSchedule();
+        renderSchedulerForecast();
+        renderLogs();
+        renderAnalytics();
+        updateSummary();
+      } catch (err) {} finally {
+        liveRuntimeRefreshInFlight = false;
       }
     }
     function renderSettings() {
@@ -4652,7 +4716,7 @@
     }
 
     function updateSummary() {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getTodayDateKey();
       const activePosts = state.posts.filter((post) => isPostActiveNow(post, today)).length;
       const logsToday = state.logs.filter((log) => (log.date || '').startsWith(today)).length;
       const analyticsTotals = state.analytics?.totals || {};
@@ -4677,7 +4741,7 @@
     }
 
     function getPostStatus(post) {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getTodayDateKey();
       const lifecycle = getPostLifecycle(post, today);
       if (lifecycle === 'paused') return { label: 'In pausa', className: 'paused' };
       if (lifecycle === 'expired') return { label: 'Scaduto', className: 'expired' };
@@ -4743,6 +4807,9 @@
       if (els.saveSettingsBtn) els.saveSettingsBtn.disabled = true;
       if (els.saveRunNowBtn) els.saveRunNowBtn.disabled = true;
       try {
+        if (runNow) {
+          await syncRuntimeDate();
+        }
         const payload = {
           scheduleEnabled: els.scheduleEnabled.checked ? 1 : 0,
           scheduleTime: els.scheduleTime.value,
@@ -4750,7 +4817,7 @@
           minIntervalMinutes: Number(els.minIntervalMinutes.value || 0),
           rotationGapMinutes: Number(els.rotationGapMinutes.value || 0),
           runNow: runNow ? 1 : 0,
-          runDate: new Date().toISOString().slice(0, 10)
+          runDate: getTodayDateKey()
         };
         const result = await fetchJson('/settings', {
           method: 'PUT',
@@ -5070,9 +5137,10 @@
       renderPosts();
     }
 
-    function applyScheduleDate(value, shouldReload = true) {
+    function applyScheduleDate(value, shouldReload = true, pinToToday = false) {
       if (!isValidDateString(value)) return false;
       state.scheduleDate = value;
+      state.scheduleDatePinnedToToday = Boolean(pinToToday);
       state.schedulePage = 1;
       if (els.scheduleDate.value !== value) {
         els.scheduleDate.value = value;
@@ -5261,7 +5329,7 @@
 
     els.scheduleDate.addEventListener('change', () => {
       const value = els.scheduleDate.value.trim();
-      if (!applyScheduleDate(value, true)) {
+      if (!applyScheduleDate(value, true, value === getTodayDateKey())) {
         els.scheduleDate.value = state.scheduleDate;
       }
     });
@@ -5288,9 +5356,10 @@
       });
     }
     if (els.scheduleTodayBtn) {
-      els.scheduleTodayBtn.addEventListener('click', () => {
-        const today = new Date().toISOString().slice(0, 10);
-        applyScheduleDate(today, true);
+      els.scheduleTodayBtn.addEventListener('click', async () => {
+        await syncRuntimeDate();
+        const today = getTodayDateKey();
+        applyScheduleDate(today, true, true);
       });
     }
 
@@ -5539,6 +5608,10 @@
     loadAll().then(() => {
       restorePostFormDraft();
     }).catch(() => {});
+    setInterval(() => {
+      if (document.hidden) return;
+      refreshLiveRuntimePanels();
+    }, LIVE_RUNTIME_REFRESH_MS);
   </script>
 </body>
 </html>

@@ -19,13 +19,17 @@ app.use((req, res, next) => {
  next();
 });
 
-const db = new Database('db.sqlite');
-db.pragma('journal_mode = WAL');
-
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 const CRON_TIME = process.env.CRON_TIME || '0 9 * * *';
 const CRON_TZ = process.env.CRON_TZ || null;
 const ANALYTICS_SALT = process.env.ANALYTICS_SALT || '';
+let cronTzFallbackWarned = false;
+const DB_PATH = process.env.DB_PATH || 'db.sqlite';
+const PORT = Number(process.env.PORT || 3000);
+const RUNTIME_DISABLED = process.env.DISABLE_RUNTIME === '1' || process.env.NODE_ENV === 'test';
+
+const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -324,6 +328,13 @@ function timeToMinutes(value) {
  return h * 60 + m;
 }
 
+function warnCronTzFallback(reason) {
+ if (!CRON_TZ || cronTzFallbackWarned) return;
+ cronTzFallbackWarned = true;
+ const reasonText = reason ? ` (${reason})` : '';
+ console.warn(`CRON_TZ fallback to server local time${reasonText}. CRON_TZ="${CRON_TZ}"`);
+}
+
 function resolveNowParts() {
  const fallback = new Date();
  const fallbackParts = {
@@ -368,7 +379,10 @@ function resolveNowParts() {
     second: parts.second
    };
   }
- } catch (e) {}
+  warnCronTzFallback('invalid time zone parts');
+ } catch (e) {
+  warnCronTzFallback(e?.message || 'invalid timezone');
+ }
  return fallbackParts;
 }
 
@@ -1256,6 +1270,29 @@ function markExpiredPendingScheduleItems(currentDate) {
  `).run(updatedAt, dayStart);
 }
 
+function markInvalidPendingScheduleItems() {
+ const updatedAt = new Date().toISOString();
+ db.prepare(`
+  UPDATE schedule_items
+   SET status = 'failed',
+    sentAt = COALESCE(sentAt, ?),
+    error = COALESCE(error, 'Skipped: post inactive or outside campaign date'),
+    processingStartedAt = NULL
+   WHERE status = 'pending'
+    AND EXISTS (
+     SELECT 1
+     FROM posts
+     WHERE posts.id = schedule_items.postId
+      AND (
+       posts.platform <> 'telegram'
+       OR COALESCE(posts.active, 0) <> 1
+       OR posts.startDate > substr(schedule_items.scheduledAt, 1, 10)
+       OR posts.endDate < substr(schedule_items.scheduledAt, 1, 10)
+      )
+    )
+ `).run(updatedAt);
+}
+
 function claimNextDueScheduleItem(nowIso, currentDate) {
  if (!isValidDateString(currentDate)) return null;
  const dayStart = `${currentDate}T00:00:00`;
@@ -1269,6 +1306,9 @@ function claimNextDueScheduleItem(nowIso, currentDate) {
     AND schedule_items.scheduledAt >= ?
     AND schedule_items.scheduledAt <= ?
     AND posts.platform = 'telegram'
+    AND COALESCE(posts.active, 0) = 1
+    AND posts.startDate <= substr(schedule_items.scheduledAt, 1, 10)
+    AND posts.endDate >= substr(schedule_items.scheduledAt, 1, 10)
    ORDER BY schedule_items.scheduledAt ASC, schedule_items.id ASC
    LIMIT 1
   `).get(dayStart, nowIso);
@@ -1302,6 +1342,7 @@ async function processDueSchedule(force = false) {
  scheduleProcessing = true;
  try {
   const settings = getSchedulerSettings();
+  if (!force && !settings.enabled) return;
   const minIntervalMs = Math.max(1, settings.minIntervalMinutes) * 60 * 1000;
   const lastSentAt = getSetting('lastSentAt');
   if (!force && lastSentAt) {
@@ -1310,9 +1351,10 @@ async function processDueSchedule(force = false) {
   }
 
   cleanupOrphanScheduleItems();
-  reclaimStaleProcessingItems(Math.max(60, settings.minIntervalMinutes * 8));
+  reclaimStaleProcessingItems(Math.max(10, settings.minIntervalMinutes * 2));
   const currentDate = getCurrentDateString();
   markExpiredPendingScheduleItems(currentDate);
+  markInvalidPendingScheduleItems();
   const nowIso = nowLocalIso();
   const claimedScheduleId = claimNextDueScheduleItem(nowIso, currentDate);
   if (!claimedScheduleId) return;
@@ -1344,13 +1386,23 @@ async function processDueSchedule(force = false) {
   if (!item.platform) {
    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
     .run('failed', sentAt, 'Post not found', null, item.scheduleId);
-   setSetting('lastSentAt', sentAt);
    return;
   }
   if (item.platform !== 'telegram') {
    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
     .run('failed', sentAt, 'Unsupported platform', null, item.scheduleId);
-   setSetting('lastSentAt', sentAt);
+   return;
+  }
+  const scheduledDate = toDatePart(item.scheduledAt);
+  const inCampaignWindow = Number(item.active) === 1 &&
+   isValidDateString(item.startDate) &&
+   isValidDateString(item.endDate) &&
+   isValidDateString(scheduledDate) &&
+   item.startDate <= scheduledDate &&
+   item.endDate >= scheduledDate;
+  if (!inCampaignWindow) {
+   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+    .run('failed', sentAt, 'Skipped: post inactive or outside campaign date', null, item.scheduleId);
    return;
   }
   try {
@@ -1360,12 +1412,12 @@ async function processDueSchedule(force = false) {
     .run('sent', sentAt, null, null, item.scheduleId);
    insertLog(item, 'sent', null, 'auto', null, deliveryMeta);
    storeRotationCursorFromScheduleItem(item);
+   setSetting('lastSentAt', sentAt);
   } catch (e) {
    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
     .run('failed', sentAt, e.message, null, item.scheduleId);
    insertLog(item, 'failed', e.message, 'auto');
   }
-  setSetting('lastSentAt', sentAt);
  } finally {
   scheduleProcessing = false;
  }
@@ -1571,12 +1623,8 @@ ensureColumn('drafts', 'createdAt', 'TEXT');
 app.use('/uploads', express.static(uploadsDir));
 cleanupOrphanScheduleItems();
 markExpiredPendingScheduleItems(getCurrentDateString());
-reclaimStaleProcessingItems();
-configureScheduleJob();
-ensureTodaySchedule();
-setInterval(() => {
- processDueSchedule().catch((e) => console.log('Schedule tick failed:', e.message));
-}, 30000);
+markInvalidPendingScheduleItems();
+reclaimStaleProcessingItems(15);
 
 app.get('/health', (_, res) => res.send({ ok: true }));
 
@@ -2058,4 +2106,63 @@ app.get('/logs', (_, res) => res.send(db.prepare(`
  ORDER BY logs.id DESC
 `).all()));
 
-app.listen(3000, () => console.log('Back is up!'));
+let runtimeTickHandle = null;
+let httpServer = null;
+
+function startRuntimeWorkers() {
+ if (runtimeTickHandle) return;
+ configureScheduleJob();
+ ensureTodaySchedule();
+ runtimeTickHandle = setInterval(() => {
+  processDueSchedule().catch((e) => console.log('Schedule tick failed:', e.message));
+ }, 30000);
+}
+
+function stopRuntimeWorkers() {
+ if (runtimeTickHandle) {
+  clearInterval(runtimeTickHandle);
+  runtimeTickHandle = null;
+ }
+ if (scheduleJob) {
+  scheduleJob.stop();
+  scheduleJob = null;
+ }
+}
+
+function startHttpServer(port = PORT) {
+ if (httpServer) return httpServer;
+ httpServer = app.listen(port, () => console.log(`Back is up on ${port}!`));
+ return httpServer;
+}
+
+function stopHttpServer() {
+ if (!httpServer) return;
+ httpServer.close();
+ httpServer = null;
+}
+
+if (!RUNTIME_DISABLED) {
+ startRuntimeWorkers();
+ startHttpServer(PORT);
+}
+
+export {
+ app,
+ db,
+ getSetting,
+ setSetting,
+ getCurrentDateString,
+ nowLocalIso,
+ buildRuntimePlan,
+ generateDailySchedule,
+ cleanupOrphanScheduleItems,
+ markExpiredPendingScheduleItems,
+ markInvalidPendingScheduleItems,
+ reclaimStaleProcessingItems,
+ claimNextDueScheduleItem,
+ processDueSchedule,
+ startRuntimeWorkers,
+ stopRuntimeWorkers,
+ startHttpServer,
+ stopHttpServer
+};

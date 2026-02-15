@@ -324,17 +324,78 @@ function timeToMinutes(value) {
  return h * 60 + m;
 }
 
-function minutesToIso(date, minutes) {
- const base = new Date(`${date}T00:00:00`);
- base.setMinutes(base.getMinutes() + minutes);
+function resolveNowParts() {
+ const fallback = new Date();
+ const fallbackParts = {
+  year: fallback.getFullYear(),
+  month: fallback.getMonth() + 1,
+  day: fallback.getDate(),
+  hour: fallback.getHours(),
+  minute: fallback.getMinutes(),
+  second: fallback.getSeconds()
+ };
+ if (!CRON_TZ) return fallbackParts;
+ try {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+   timeZone: CRON_TZ,
+   year: 'numeric',
+   month: '2-digit',
+   day: '2-digit',
+   hour: '2-digit',
+   minute: '2-digit',
+   second: '2-digit',
+   hourCycle: 'h23'
+  });
+  const parts = {};
+  for (const part of formatter.formatToParts(new Date())) {
+   if (part.type === 'literal') continue;
+   parts[part.type] = Number(part.value);
+  }
+  if (
+   Number.isFinite(parts.year) &&
+   Number.isFinite(parts.month) &&
+   Number.isFinite(parts.day) &&
+   Number.isFinite(parts.hour) &&
+   Number.isFinite(parts.minute) &&
+   Number.isFinite(parts.second)
+  ) {
+   return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour,
+    minute: parts.minute,
+    second: parts.second
+   };
+  }
+ } catch (e) {}
+ return fallbackParts;
+}
+
+function getCurrentDateString() {
+ const now = resolveNowParts();
  const pad = (num) => String(num).padStart(2, '0');
- return `${base.getFullYear()}-${pad(base.getMonth() + 1)}-${pad(base.getDate())}T${pad(base.getHours())}:${pad(base.getMinutes())}:00`;
+ return `${now.year}-${pad(now.month)}-${pad(now.day)}`;
+}
+
+function getCurrentMinutes() {
+ const now = resolveNowParts();
+ return now.hour * 60 + now.minute;
+}
+
+function minutesToIso(date, minutes) {
+ if (!isValidDateString(date) || !Number.isFinite(minutes)) return null;
+ const [yy, mm, dd] = date.split('-').map(Number);
+ const baseUtc = Date.UTC(yy, mm - 1, dd, 0, 0, 0);
+ const shifted = new Date(baseUtc + (Math.floor(minutes) * 60 * 1000));
+ const pad = (num) => String(num).padStart(2, '0');
+ return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}T${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}:00`;
 }
 
 function nowLocalIso() {
- const now = new Date();
+ const now = resolveNowParts();
  const pad = (num) => String(num).padStart(2, '0');
- return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+ return `${now.year}-${pad(now.month)}-${pad(now.day)}T${pad(now.hour)}:${pad(now.minute)}:${pad(now.second)}`;
 }
 
 function getSchedulerDefaults() {
@@ -417,19 +478,29 @@ function parseTelegramViews(value) {
  return Math.floor(numeric);
 }
 
+function normalizeChatIdForStorage(value) {
+ const normalized = normalizeText(value);
+ if (!normalized) return null;
+ return /^-?\d+$/.test(normalized) ? normalized : null;
+}
+
 function updateLogViewsFromTelegramMessage(message) {
  if (!message || !message.message_id) return;
  const messageId = parseTelegramMessageId(message.message_id);
+ const chatId = normalizeChatIdForStorage(message?.chat?.id);
  const views = parseTelegramViews(message.views);
- if (!messageId || views === null) return;
+ if (!messageId || !chatId || views === null) return;
  const updatedAt = new Date().toISOString();
  db.prepare(`
   UPDATE logs
    SET sentViews = ?,
     viewsUpdatedAt = ?,
-    sentMessageId = COALESCE(sentMessageId, ?)
-   WHERE platform = 'telegram' AND sentMessageId = ?
- `).run(views, updatedAt, messageId, messageId);
+    sentMessageId = COALESCE(sentMessageId, ?),
+    sentChatId = COALESCE(sentChatId, ?)
+   WHERE platform = 'telegram'
+    AND sentMessageId = ?
+    AND (sentChatId = ? OR sentChatId IS NULL)
+ `).run(views, updatedAt, messageId, chatId, messageId, chatId);
 }
 
 async function handleTelegramMessage(message) {
@@ -542,7 +613,7 @@ async function sendTelegramPost(post) {
   if (replyMarkup) payload.reply_markup = replyMarkup;
   const copyResult = await telegramApi('copyMessage', payload);
   return {
-   sentChatId: chatId,
+   sentChatId: normalizeChatIdForStorage(chatId),
    sentMessageId: parseTelegramMessageId(copyResult),
    sentViews: parseTelegramViews(copyResult?.views)
   };
@@ -552,11 +623,11 @@ async function sendTelegramPost(post) {
  const payload = { chat_id: chatId, text: post.text };
  if (replyMarkup) payload.reply_markup = replyMarkup;
  const sentResult = await telegramApi('sendMessage', payload);
- const sentChatId = sentResult?.chat?.id !== undefined && sentResult?.chat?.id !== null
+ const sentChatIdRaw = sentResult?.chat?.id !== undefined && sentResult?.chat?.id !== null
   ? String(sentResult.chat.id)
   : chatId;
  return {
-  sentChatId,
+  sentChatId: normalizeChatIdForStorage(sentChatIdRaw) || normalizeChatIdForStorage(chatId),
   sentMessageId: parseTelegramMessageId(sentResult),
   sentViews: parseTelegramViews(sentResult?.views)
  };
@@ -912,6 +983,18 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
  const sequence = rotation.sequence;
  const sortedPosts = rotation.sortedPosts;
  const perPostCounts = new Map(sortedPosts.map((post) => [post.id, 0]));
+ const preferredMinuteByPost = new Map();
+ const pendingPreferred = [];
+ for (const post of sortedPosts) {
+  const preferredMinute = timeToMinutes(post?.preferredTime);
+  if (preferredMinute === null) continue;
+  preferredMinuteByPost.set(post.id, preferredMinute);
+  pendingPreferred.push({ post, preferredMinute });
+ }
+ pendingPreferred.sort((a, b) => {
+  if (a.preferredMinute !== b.preferredMinute) return a.preferredMinute - b.preferredMinute;
+  return compareCompanyPosts(a.post, b.post);
+ });
  const defaultResult = {
   sequenceLength: sequence.length,
   totalWeight: rotation.totalWeight,
@@ -931,10 +1014,9 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
  }
 
  let runtimeStartMinutes = windowStart;
- const isToday = targetDate === new Date().toISOString().slice(0, 10);
+ const isToday = targetDate === getCurrentDateString();
  if (options.startFromNow && isToday) {
-  const now = new Date();
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const nowMinutes = getCurrentMinutes();
   runtimeStartMinutes = Math.max(runtimeStartMinutes, nowMinutes);
  }
  if (runtimeStartMinutes > windowEnd) {
@@ -952,14 +1034,66 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
  let pointer = startCursor;
  let currentMinutes = runtimeStartMinutes;
  const slots = [];
+ const preferredReleased = new Set();
+
+ const pickNextRotatingPost = () => {
+  if (!sequence.length) return { post: null, nextPointer: pointer };
+  for (let shift = 0; shift < sequence.length; shift += 1) {
+   const index = (pointer + shift) % sequence.length;
+   const candidate = sequence[index];
+   const preferredMinute = preferredMinuteByPost.get(candidate.id);
+   const waitingPreferredWindow = preferredMinute !== undefined &&
+    !preferredReleased.has(candidate.id) &&
+    currentMinutes < preferredMinute;
+   if (waitingPreferredWindow) continue;
+   return {
+    post: candidate,
+    nextPointer: (index + 1) % sequence.length
+   };
+  }
+  return {
+   post: sequence[pointer],
+   nextPointer: (pointer + 1) % sequence.length
+  };
+ };
 
  while (currentMinutes <= windowEnd) {
-  const post = sequence[pointer];
-  slots.push({ post, minutes: currentMinutes });
+  let post = null;
+  let usedPreferredOverride = false;
+  const duePreferredIndex = pendingPreferred.findIndex((entry) => entry.preferredMinute <= currentMinutes);
+  if (duePreferredIndex >= 0) {
+   post = pendingPreferred[duePreferredIndex].post;
+   pendingPreferred.splice(duePreferredIndex, 1);
+   usedPreferredOverride = true;
+  } else {
+   const hasAllowedRotatingPost = sequence.some((candidate) => {
+    const preferredMinute = preferredMinuteByPost.get(candidate.id);
+    return preferredMinute === undefined || preferredReleased.has(candidate.id) || currentMinutes >= preferredMinute;
+   });
+   if (!hasAllowedRotatingPost && pendingPreferred.length) {
+    const nextPreferredMinute = pendingPreferred[0].preferredMinute;
+    if (nextPreferredMinute > currentMinutes) {
+     currentMinutes = nextPreferredMinute;
+     continue;
+    }
+   }
+   const picked = pickNextRotatingPost();
+   post = picked.post;
+   pointer = picked.nextPointer;
+  }
+  if (!post) break;
+  if (preferredMinuteByPost.has(post.id)) {
+   preferredReleased.add(post.id);
+  }
+  slots.push({
+   post,
+   minutes: currentMinutes,
+   source: usedPreferredOverride ? 'preferred' : 'rotation',
+   rotationCursorAfter: pointer
+  });
   perPostCounts.set(post.id, (perPostCounts.get(post.id) || 0) + 1);
-  pointer = (pointer + 1) % sequence.length;
   currentMinutes += minIntervalMinutes;
-  if (pointer === 0) currentMinutes += rotationGapMinutes;
+  if (!usedPreferredOverride && pointer === 0) currentMinutes += rotationGapMinutes;
  }
 
  const totalPublications = slots.length;
@@ -1049,7 +1183,7 @@ function calculateScheduleForecast(date, posts, config, options = {}) {
 }
 
 function generateDailySchedule(date, startFromNow = true, options = {}) {
- const targetDate = date || new Date().toISOString().slice(0, 10);
+ const targetDate = date || getCurrentDateString();
  const settings = getSchedulerSettings();
  const posts = getActiveTelegramPostsForDate(targetDate);
 
@@ -1057,23 +1191,23 @@ function generateDailySchedule(date, startFromNow = true, options = {}) {
 
  const dayStart = `${targetDate}T00:00:00`;
  const dayEnd = `${targetDate}T23:59:59.999`;
- db.prepare(`DELETE FROM schedule_items WHERE scheduledAt >= ? AND scheduledAt <= ? AND status = 'pending'`)
-  .run(dayStart, dayEnd);
 
  const plan = buildRuntimePlan(targetDate, posts, settings, {
   startFromNow,
   startCursor: options.startCursor
  });
  const createdAt = new Date().toISOString();
- for (const slot of plan.slots) {
-  const scheduledAt = minutesToIso(targetDate, slot.minutes);
-  db.prepare(`INSERT INTO schedule_items (postId, scheduledAt, status, createdAt) VALUES (?,?,?,?)`)
-   .run(slot.post.id, scheduledAt, 'pending', createdAt);
- }
-
- if (options.advanceCursor !== false && plan.sequenceLength) {
-  storeRotationCursor(plan.endCursor, targetDate, plan.sequenceLength);
- }
+ const persistSchedule = db.transaction(() => {
+  db.prepare(`DELETE FROM schedule_items WHERE scheduledAt >= ? AND scheduledAt <= ? AND status = 'pending'`)
+   .run(dayStart, dayEnd);
+  for (const slot of plan.slots) {
+   const scheduledAt = minutesToIso(targetDate, slot.minutes);
+   if (!scheduledAt) continue;
+   db.prepare(`INSERT INTO schedule_items (postId, scheduledAt, status, createdAt, rotationCursorAfter) VALUES (?,?,?,?,?)`)
+    .run(slot.post.id, scheduledAt, 'pending', createdAt, Number(slot.rotationCursorAfter) || 0);
+  }
+ });
+ persistSchedule();
 
  return {
   date: targetDate,
@@ -1085,6 +1219,81 @@ function generateDailySchedule(date, startFromNow = true, options = {}) {
   windowStartTime: minutesToTimeString(plan.windowStartMinutes),
   windowEndTime: minutesToTimeString(plan.windowEndMinutes)
  };
+}
+
+function cleanupOrphanScheduleItems() {
+ db.prepare(`
+  DELETE FROM schedule_items
+   WHERE postId NOT IN (SELECT id FROM posts)
+ `).run();
+}
+
+function reclaimStaleProcessingItems(timeoutMinutes = 120) {
+ const timeoutMs = Math.max(5, Number(timeoutMinutes) || 120) * 60 * 1000;
+ const threshold = new Date(Date.now() - timeoutMs).toISOString();
+ db.prepare(`
+  UPDATE schedule_items
+   SET status = 'pending',
+    processingStartedAt = NULL,
+    error = COALESCE(error, 'Recovered after process restart')
+   WHERE status = 'processing'
+    AND (processingStartedAt IS NULL OR processingStartedAt < ?)
+ `).run(threshold);
+}
+
+function markExpiredPendingScheduleItems(currentDate) {
+ if (!isValidDateString(currentDate)) return;
+ const dayStart = `${currentDate}T00:00:00`;
+ const updatedAt = new Date().toISOString();
+ db.prepare(`
+  UPDATE schedule_items
+   SET status = 'failed',
+    sentAt = COALESCE(sentAt, ?),
+    error = COALESCE(error, 'Skipped: scheduled day passed'),
+    processingStartedAt = NULL
+   WHERE status = 'pending'
+    AND scheduledAt < ?
+ `).run(updatedAt, dayStart);
+}
+
+function claimNextDueScheduleItem(nowIso, currentDate) {
+ if (!isValidDateString(currentDate)) return null;
+ const dayStart = `${currentDate}T00:00:00`;
+ const claimStartedAt = new Date().toISOString();
+ const claimTx = db.transaction(() => {
+  const candidate = db.prepare(`
+   SELECT schedule_items.id as scheduleId
+   FROM schedule_items
+   JOIN posts ON schedule_items.postId = posts.id
+   WHERE schedule_items.status = 'pending'
+    AND schedule_items.scheduledAt >= ?
+    AND schedule_items.scheduledAt <= ?
+    AND posts.platform = 'telegram'
+   ORDER BY schedule_items.scheduledAt ASC, schedule_items.id ASC
+   LIMIT 1
+  `).get(dayStart, nowIso);
+  if (!candidate?.scheduleId) return null;
+  const claimResult = db.prepare(`
+   UPDATE schedule_items
+    SET status = 'processing',
+     processingStartedAt = ?,
+     error = NULL
+    WHERE id = ? AND status = 'pending'
+  `).run(claimStartedAt, candidate.scheduleId);
+  if (!claimResult.changes) return null;
+  return candidate.scheduleId;
+ });
+ return claimTx();
+}
+
+function storeRotationCursorFromScheduleItem(item) {
+ const cursor = Number(item?.rotationCursorAfter);
+ if (!Number.isFinite(cursor) || cursor < 0) return;
+ setSetting('runtimeRotationCursor', String(Math.floor(cursor)));
+ const date = toDatePart(item?.scheduledAt);
+ if (date) {
+  setSetting('runtimeRotationDate', date);
+ }
 }
 
 let scheduleProcessing = false;
@@ -1100,42 +1309,60 @@ async function processDueSchedule(force = false) {
    if (delta < minIntervalMs) return;
   }
 
+  cleanupOrphanScheduleItems();
+  reclaimStaleProcessingItems(Math.max(60, settings.minIntervalMinutes * 8));
+  const currentDate = getCurrentDateString();
+  markExpiredPendingScheduleItems(currentDate);
   const nowIso = nowLocalIso();
+  const claimedScheduleId = claimNextDueScheduleItem(nowIso, currentDate);
+  if (!claimedScheduleId) return;
   const item = db.prepare(`
-    SELECT
-     schedule_items.id as scheduleId,
-     schedule_items.postId as schedulePostId,
-     schedule_items.scheduledAt,
-     schedule_items.status,
-     schedule_items.error,
-     schedule_items.createdAt,
-     schedule_items.sentAt,
-     posts.*,
-     companies.name as companyName,
-     links.code as linkCode
-    FROM schedule_items
-    JOIN posts ON schedule_items.postId = posts.id
-    JOIN companies ON posts.companyId = companies.id
-    LEFT JOIN links ON posts.linkId = links.id
-    WHERE schedule_items.status='pending' AND schedule_items.scheduledAt <= ? AND posts.platform = 'telegram'
-    ORDER BY schedule_items.scheduledAt ASC
-    LIMIT 1
-   `).get(nowIso);
+   SELECT
+    schedule_items.id as scheduleId,
+    schedule_items.postId as schedulePostId,
+    schedule_items.scheduledAt,
+    schedule_items.status,
+    schedule_items.error,
+    schedule_items.createdAt,
+    schedule_items.sentAt,
+    schedule_items.rotationCursorAfter,
+    schedule_items.processingStartedAt,
+    posts.*,
+    companies.name as companyName,
+    links.code as linkCode
+   FROM schedule_items
+   LEFT JOIN posts ON schedule_items.postId = posts.id
+   LEFT JOIN companies ON posts.companyId = companies.id
+   LEFT JOIN links ON posts.linkId = links.id
+   WHERE schedule_items.id = ?
+   LIMIT 1
+  `).get(claimedScheduleId);
 
   if (!item) return;
 
   const sentAt = new Date().toISOString();
+  if (!item.platform) {
+   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+    .run('failed', sentAt, 'Post not found', null, item.scheduleId);
+   setSetting('lastSentAt', sentAt);
+   return;
+  }
+  if (item.platform !== 'telegram') {
+   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+    .run('failed', sentAt, 'Unsupported platform', null, item.scheduleId);
+   setSetting('lastSentAt', sentAt);
+   return;
+  }
   try {
    let deliveryMeta = null;
-   if (item.platform === 'telegram') {
-    deliveryMeta = await sendTelegramPost(item);
-   }
-   db.prepare('UPDATE schedule_items SET status=?, sentAt=? WHERE id=?')
-    .run('sent', sentAt, item.scheduleId);
+   deliveryMeta = await sendTelegramPost(item);
+   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+    .run('sent', sentAt, null, null, item.scheduleId);
    insertLog(item, 'sent', null, 'auto', null, deliveryMeta);
+   storeRotationCursorFromScheduleItem(item);
   } catch (e) {
-   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=? WHERE id=?')
-    .run('failed', sentAt, e.message, item.scheduleId);
+   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+    .run('failed', sentAt, e.message, null, item.scheduleId);
    insertLog(item, 'failed', e.message, 'auto');
   }
   setSetting('lastSentAt', sentAt);
@@ -1166,7 +1393,7 @@ function ensureTodaySchedule() {
  if (!settings.enabled) return;
  const scheduleTime = normalizeTime(settings.scheduleTime);
  if (!scheduleTime) return;
- const today = new Date().toISOString().slice(0, 10);
+ const today = getCurrentDateString();
  const dayStart = `${today}T00:00:00`;
  const dayEnd = `${today}T23:59:59.999`;
  const existing = db.prepare('SELECT COUNT(*) as count FROM schedule_items WHERE scheduledAt >= ? AND scheduledAt <= ?')
@@ -1174,8 +1401,7 @@ function ensureTodaySchedule() {
  if (existing > 0) return;
  const [hh, mm] = scheduleTime.split(':').map(Number);
  const scheduleMinutes = hh * 60 + mm;
- const now = new Date();
- const nowMinutes = now.getHours() * 60 + now.getMinutes();
+ const nowMinutes = getCurrentMinutes();
  if (nowMinutes >= scheduleMinutes) {
   generateDailySchedule(today, true);
  }
@@ -1256,7 +1482,9 @@ db.prepare(`CREATE TABLE IF NOT EXISTS schedule_items (
  status TEXT,
  error TEXT,
  createdAt TEXT,
- sentAt TEXT
+ sentAt TEXT,
+ processingStartedAt TEXT,
+ rotationCursorAfter INTEGER
 )`).run();
 
 db.prepare(`CREATE TABLE IF NOT EXISTS logs (
@@ -1299,6 +1527,9 @@ db.prepare(`CREATE TABLE IF NOT EXISTS settings (
  value TEXT
 )`).run();
 
+db.prepare('CREATE INDEX IF NOT EXISTS idx_schedule_items_status_scheduled ON schedule_items(status, scheduledAt)').run();
+db.prepare('CREATE INDEX IF NOT EXISTS idx_schedule_items_post ON schedule_items(postId)').run();
+
 ensureColumn('companies', 'telegramChannelId', 'TEXT');
 ensureColumn('companies', 'telegramPublicUrl', 'TEXT');
 ensureColumn('companies', 'preferredTime', 'TEXT');
@@ -1319,6 +1550,9 @@ ensureColumn('logs', 'sentChatId', 'TEXT');
 ensureColumn('logs', 'sentMessageId', 'INTEGER');
 ensureColumn('logs', 'sentViews', 'INTEGER');
 ensureColumn('logs', 'viewsUpdatedAt', 'TEXT');
+ensureColumn('schedule_items', 'processingStartedAt', 'TEXT');
+ensureColumn('schedule_items', 'rotationCursorAfter', 'INTEGER');
+db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_message_chat ON logs(platform, sentMessageId, sentChatId)').run();
 
 ensureColumn('drafts', 'source', 'TEXT');
 ensureColumn('drafts', 'chatId', 'TEXT');
@@ -1335,6 +1569,9 @@ ensureColumn('drafts', 'buttons', 'TEXT');
 ensureColumn('drafts', 'createdAt', 'TEXT');
 
 app.use('/uploads', express.static(uploadsDir));
+cleanupOrphanScheduleItems();
+markExpiredPendingScheduleItems(getCurrentDateString());
+reclaimStaleProcessingItems();
 configureScheduleJob();
 ensureTodaySchedule();
 setInterval(() => {
@@ -1359,7 +1596,7 @@ app.put('/settings', (req, res) => {
  const scheduleEnabled = req.body?.scheduleEnabled;
  const runNow = req.body?.runNow === 1 || req.body?.runNow === true || req.body?.runNow === '1';
  const runDateInput = String(req.body?.runDate || '').trim();
- const runDate = runDateInput || new Date().toISOString().slice(0, 10);
+ const runDate = runDateInput || getCurrentDateString();
  if (runNow && !isValidDateString(runDate)) return badRequest(res, 'Invalid run date');
  const scheduleTime = normalizeTime(req.body?.scheduleTime);
  const runtimeEndTimeInput = req.body?.runtimeEndTime;
@@ -1395,7 +1632,7 @@ app.put('/settings', (req, res) => {
  configureScheduleJob();
  let runNowResult = null;
  if (runNow) {
-  runNowResult = generateDailySchedule(runDate, true, { advanceCursor: true });
+  runNowResult = generateDailySchedule(runDate, true);
   processDueSchedule(true).catch((e) => console.log('Settings run-now failed:', e.message));
  }
  res.send({ ok: true, runNowResult });
@@ -1638,7 +1875,11 @@ app.put('/posts/:id', (req, res) => {
 app.delete('/posts/:id', (req, res) => {
  const id = Number(req.params.id);
  if (!id) return badRequest(res, 'Invalid post id');
- db.prepare('DELETE FROM posts WHERE id = ?').run(id);
+ const removePost = db.transaction((postId) => {
+  db.prepare('DELETE FROM schedule_items WHERE postId = ?').run(postId);
+  db.prepare('DELETE FROM posts WHERE id = ?').run(postId);
+ });
+ removePost(id);
  res.send({ ok: true });
 });
 
@@ -1659,7 +1900,7 @@ app.post('/posts/:id/renew', (req, res) => {
  if (!id) return badRequest(res, 'Invalid post id');
  const post = db.prepare('SELECT id, startDate, endDate FROM posts WHERE id = ?').get(id);
  if (!post) return res.status(404).send({ ok: false, error: 'Post not found' });
- const today = new Date().toISOString().slice(0, 10);
+ const today = getCurrentDateString();
  const base = maxDateString(post.endDate, post.startDate, today) || today;
  const newEndDate = addDaysToDateString(base, 30);
  if (!newEndDate) return res.status(500).send({ ok: false, error: 'Renew failed' });
@@ -1672,7 +1913,7 @@ app.post('/schedule/run', async (req, res) => {
  if (date && !isValidDateString(date)) return badRequest(res, 'Invalid date format');
  const startFromNow = !(req.body?.startFromNow === 0 || req.body?.startFromNow === false || req.body?.startFromNow === '0');
  try {
-  const result = generateDailySchedule(date, startFromNow, { advanceCursor: true });
+  const result = generateDailySchedule(date, startFromNow);
   processDueSchedule(true).catch((e) => console.log('Manual schedule send failed:', e.message));
   res.send({ ok: true, result });
  } catch (e) {
@@ -1683,7 +1924,7 @@ app.post('/schedule/run', async (req, res) => {
 app.get('/schedule/forecast', (req, res) => {
  const date = req.query?.date;
  if (date && !isValidDateString(date)) return badRequest(res, 'Invalid date format');
- const targetDate = date || new Date().toISOString().slice(0, 10);
+ const targetDate = date || getCurrentDateString();
  const settings = getSchedulerSettings();
 
  const startTimeRaw = req.query?.startTime;
@@ -1731,7 +1972,7 @@ app.get('/schedule/forecast', (req, res) => {
 app.get('/schedule/items', (req, res) => {
  const date = req.query?.date;
  if (date && !isValidDateString(date)) return badRequest(res, 'Invalid date format');
- const targetDate = date || new Date().toISOString().slice(0, 10);
+ const targetDate = date || getCurrentDateString();
  const rows = db.prepare(`
   SELECT schedule_items.*,
    posts.platform as postPlatform,

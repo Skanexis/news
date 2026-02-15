@@ -1563,6 +1563,10 @@
       line-height: 1.1;
     }
 
+    .analytics-note {
+      margin: -2px 0 8px;
+    }
+
     .choice-row {
       display: flex;
       align-items: center;
@@ -1838,6 +1842,8 @@
     .stats-grid .stat-card:nth-child(3) { animation-delay: 0.15s; }
     .stats-grid .stat-card:nth-child(4) { animation-delay: 0.2s; }
     .stats-grid .stat-card:nth-child(5) { animation-delay: 0.25s; }
+    .stats-grid .stat-card:nth-child(6) { animation-delay: 0.3s; }
+    .stats-grid .stat-card:nth-child(7) { animation-delay: 0.35s; }
     .grid .panel:nth-child(1) { animation-delay: 0.08s; }
     .grid .panel:nth-child(2) { animation-delay: 0.16s; }
     .grid .panel:nth-child(3) { animation-delay: 0.24s; }
@@ -2082,6 +2088,14 @@
       <div class="stat-card">
         <span>Log Oggi</span>
         <strong id="statLogs">0</strong>
+      </div>
+      <div class="stat-card">
+        <span>Reach Totale</span>
+        <strong id="statReach">0</strong>
+      </div>
+      <div class="stat-card">
+        <span>Ora Calda</span>
+        <strong id="statHotHour">-</strong>
       </div>
     </section>
 
@@ -2422,6 +2436,45 @@
             </table>
           </div>
         </div>
+
+        <div class="panel span-12" id="analyticsPanel">
+          <div class="panel-head">
+            <h3>Analitica Aziende</h3>
+            <p>Pubblicazioni dal primo giorno campagna, copertura e fasce orarie piu calde.</p>
+          </div>
+          <div id="analyticsSummary" class="runtime-summary"></div>
+          <p id="analyticsNote" class="hint analytics-note"></p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ora</th>
+                  <th>Reach</th>
+                  <th>Pubblicazioni</th>
+                  <th>Stato</th>
+                </tr>
+              </thead>
+              <tbody id="analyticsHoursTable"></tbody>
+            </table>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Azienda</th>
+                  <th>Inizio ADV</th>
+                  <th>Pubblicazioni</th>
+                  <th>Views</th>
+                  <th>Reach</th>
+                  <th>Pubbl. ore calde</th>
+                  <th>Reach ore calde</th>
+                  <th>Copertura views</th>
+                </tr>
+              </thead>
+              <tbody id="analyticsCompaniesTable"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </section>
   </div>
@@ -2478,6 +2531,7 @@
       logs: [],
       scheduleItems: [],
       schedulerForecast: null,
+      analytics: null,
       settings: null,
       companyEditId: null,
       postEditId: null,
@@ -2598,12 +2652,19 @@
       scheduleSummary: byId('scheduleSummary'),
       scheduleTable: byId('scheduleTable'),
       schedulePagination: byId('schedulePagination'),
+      analyticsPanel: byId('analyticsPanel'),
+      analyticsSummary: byId('analyticsSummary'),
+      analyticsNote: byId('analyticsNote'),
+      analyticsHoursTable: byId('analyticsHoursTable'),
+      analyticsCompaniesTable: byId('analyticsCompaniesTable'),
       logsTable: byId('logsTable'),
       statCompanies: byId('statCompanies'),
       statActivePosts: byId('statActivePosts'),
       statDrafts: byId('statDrafts'),
       statSchedule: byId('statSchedule'),
-      statLogs: byId('statLogs')
+      statLogs: byId('statLogs'),
+      statReach: byId('statReach'),
+      statHotHour: byId('statHotHour')
     };
 
     function setStatus(message, type) {
@@ -2764,6 +2825,12 @@
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return value;
       return date.toLocaleString();
+    }
+
+    function formatInt(value) {
+      const num = Number(value || 0);
+      if (!Number.isFinite(num)) return '0';
+      return Math.round(num).toLocaleString();
     }
 
     function shorten(value, limit = 60) {
@@ -3804,14 +3871,15 @@
     async function loadAll() {
       setStatus('Caricamento dati...');
       try {
-        const [companies, drafts, posts, logs, settings, scheduleItems, schedulerForecast] = await Promise.all([
+        const [companies, drafts, posts, logs, settings, scheduleItems, schedulerForecast, analytics] = await Promise.all([
           fetchJson('/companies'),
           fetchJson('/drafts'),
           fetchJson('/posts'),
           fetchJson('/logs'),
           fetchJson('/settings'),
           fetchJson(`/schedule/items?date=${state.scheduleDate}`),
-          fetchJson(`/schedule/forecast?date=${state.scheduleDate}`)
+          fetchJson(`/schedule/forecast?date=${state.scheduleDate}`),
+          fetchJson('/analytics/companies')
         ]);
         state.companies = companies || [];
         state.drafts = drafts || [];
@@ -3837,6 +3905,7 @@
         state.settings = settings || null;
         state.scheduleItems = scheduleItems || [];
         state.schedulerForecast = schedulerForecast || null;
+        state.analytics = analytics || null;
         renderAll();
         setStatus('Aggiornato.', 'success');
       } catch (err) {
@@ -4470,6 +4539,105 @@
       }).join('') || '<tr><td colspan="4" class="muted">Nessun log disponibile.</td></tr>';
     }
 
+    function renderAnalytics() {
+      if (!els.analyticsSummary || !els.analyticsNote || !els.analyticsHoursTable || !els.analyticsCompaniesTable) return;
+      const data = state.analytics;
+      if (!data || data.ok === false) {
+        els.analyticsSummary.innerHTML = `
+          <div class="runtime-summary-item">
+            <span>Aziende analizzate</span>
+            <strong>0</strong>
+          </div>
+          <div class="runtime-summary-item">
+            <span>Pubblicazioni</span>
+            <strong>0</strong>
+          </div>
+          <div class="runtime-summary-item">
+            <span>Reach</span>
+            <strong>0</strong>
+          </div>
+          <div class="runtime-summary-item">
+            <span>Ore calde</span>
+            <strong>0</strong>
+          </div>
+        `;
+        els.analyticsNote.textContent = 'Nessun dato analitico disponibile.';
+        els.analyticsHoursTable.innerHTML = '<tr><td colspan="4" class="muted">Nessuna fascia oraria disponibile.</td></tr>';
+        els.analyticsCompaniesTable.innerHTML = '<tr><td colspan="8" class="muted">Nessuna azienda disponibile.</td></tr>';
+        return;
+      }
+
+      const totals = data.totals || {};
+      const reachMetric = String(data.reachMetric || 'views');
+      const reachLabel = reachMetric === 'views' ? 'Views' : 'Pubblicazioni';
+      const hotHours = Array.isArray(data.hotHours) ? data.hotHours : [];
+      const topHours = Array.isArray(data.topHours) ? data.topHours : [];
+      const companies = Array.isArray(data.companies) ? data.companies : [];
+      const hotHourSet = new Set(hotHours.map((row) => String(row?.hour || '')));
+      const leadHour = hotHours[0]?.hour || topHours[0]?.hour || '-';
+
+      els.analyticsSummary.innerHTML = `
+        <div class="runtime-summary-item">
+          <span>Aziende analizzate</span>
+          <strong>${escapeHtml(formatInt(totals.companies || 0))}</strong>
+        </div>
+        <div class="runtime-summary-item">
+          <span>Pubblicazioni dal via campagna</span>
+          <strong>${escapeHtml(formatInt(totals.totalPublications || 0))}</strong>
+        </div>
+        <div class="runtime-summary-item">
+          <span>Reach totale (${escapeHtml(reachLabel)})</span>
+          <strong>${escapeHtml(formatInt(totals.totalReachValue || 0))}</strong>
+        </div>
+        <div class="runtime-summary-item">
+          <span>Views tracciate</span>
+          <strong>${escapeHtml(formatInt(totals.totalViews || 0))}</strong>
+        </div>
+        <div class="runtime-summary-item">
+          <span>Ora calda principale</span>
+          <strong>${escapeHtml(String(leadHour || '-'))}</strong>
+        </div>
+      `;
+
+      els.analyticsNote.textContent = reachMetric === 'views'
+        ? 'Reach calcolata sulle views Telegram rilevate nei log di invio.'
+        : 'Views non disponibili nei log: reach e ore calde calcolate sul numero pubblicazioni.';
+
+      const hourRows = topHours.slice(0, 8).map((row) => {
+        const hour = String(row?.hour || '-');
+        const reachValue = Number(row?.reachValue || 0);
+        const publications = Number(row?.totalPublications || 0);
+        const isHot = hotHourSet.has(hour);
+        return `
+          <tr>
+            <td>${escapeHtml(hour)}</td>
+            <td>${escapeHtml(formatInt(reachValue))}</td>
+            <td>${escapeHtml(formatInt(publications))}</td>
+            <td>${isHot ? '<span class="pill scheduled">HOT</span>' : '<span class="muted">-</span>'}</td>
+          </tr>
+        `;
+      }).join('');
+      els.analyticsHoursTable.innerHTML = hourRows || '<tr><td colspan="4" class="muted">Nessuna fascia oraria disponibile.</td></tr>';
+
+      const companyRows = companies.map((row) => {
+        const companyName = row?.companyName || `#${row?.companyId || '-'}`;
+        const coverage = Math.max(0, Math.min(100, Number(row?.viewCoveragePercent || 0)));
+        return `
+          <tr>
+            <td>${escapeHtml(companyName)}</td>
+            <td>${escapeHtml(row?.adStartDate || '-')}</td>
+            <td>${escapeHtml(formatInt(row?.totalPublications || 0))}</td>
+            <td>${escapeHtml(formatInt(row?.totalViews || 0))}</td>
+            <td>${escapeHtml(formatInt(row?.totalReachValue || 0))}</td>
+            <td>${escapeHtml(formatInt(row?.hotHourPublications || 0))}</td>
+            <td>${escapeHtml(formatInt(row?.hotHourReachValue || 0))}</td>
+            <td>${escapeHtml(`${Math.round(coverage)}%`)}</td>
+          </tr>
+        `;
+      }).join('');
+      els.analyticsCompaniesTable.innerHTML = companyRows || '<tr><td colspan="8" class="muted">Nessuna azienda disponibile.</td></tr>';
+    }
+
     function renderAll() {
       renderSettings();
       renderSchedulerForecast();
@@ -4478,6 +4646,7 @@
       renderPosts();
       renderSchedule();
       renderLogs();
+      renderAnalytics();
       updateSummary();
       updatePostChecklist();
     }
@@ -4486,11 +4655,21 @@
       const today = new Date().toISOString().slice(0, 10);
       const activePosts = state.posts.filter((post) => isPostActiveNow(post, today)).length;
       const logsToday = state.logs.filter((log) => (log.date || '').startsWith(today)).length;
+      const analyticsTotals = state.analytics?.totals || {};
+      const leadHotHour = state.analytics?.hotHours?.[0]?.hour
+        || state.analytics?.topHours?.[0]?.hour
+        || '-';
       els.statCompanies.textContent = state.companies.length;
       els.statActivePosts.textContent = activePosts;
       els.statDrafts.textContent = state.drafts.length;
       els.statSchedule.textContent = state.scheduleItems.length;
       els.statLogs.textContent = logsToday;
+      if (els.statReach) {
+        els.statReach.textContent = formatInt(analyticsTotals.totalReachValue || 0);
+      }
+      if (els.statHotHour) {
+        els.statHotHour.textContent = String(leadHotHour || '-');
+      }
     }
 
     function isPostActiveNow(post, today) {

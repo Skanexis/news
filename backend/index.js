@@ -404,8 +404,37 @@ async function downloadTelegramFile(fileId, nameHint) {
  return { fileName, filePath: `uploads/${fileName}` };
 }
 
+function parseTelegramMessageId(value) {
+ const candidate = typeof value === 'object' && value !== null ? value.message_id : value;
+ const numeric = Number(candidate);
+ if (!Number.isFinite(numeric) || numeric <= 0) return null;
+ return Math.floor(numeric);
+}
+
+function parseTelegramViews(value) {
+ const numeric = Number(value);
+ if (!Number.isFinite(numeric) || numeric < 0) return null;
+ return Math.floor(numeric);
+}
+
+function updateLogViewsFromTelegramMessage(message) {
+ if (!message || !message.message_id) return;
+ const messageId = parseTelegramMessageId(message.message_id);
+ const views = parseTelegramViews(message.views);
+ if (!messageId || views === null) return;
+ const updatedAt = new Date().toISOString();
+ db.prepare(`
+  UPDATE logs
+   SET sentViews = ?,
+    viewsUpdatedAt = ?,
+    sentMessageId = COALESCE(sentMessageId, ?)
+   WHERE platform = 'telegram' AND sentMessageId = ?
+ `).run(views, updatedAt, messageId, messageId);
+}
+
 async function handleTelegramMessage(message) {
  if (!message || !message.chat || !message.message_id) return;
+ updateLogViewsFromTelegramMessage(message);
  const chatId = String(message.chat.id);
  const messageId = message.message_id;
  const text = normalizeText(message.text);
@@ -511,21 +540,277 @@ async function sendTelegramPost(post) {
    message_id: draft.messageId
   };
   if (replyMarkup) payload.reply_markup = replyMarkup;
-  await telegramApi('copyMessage', payload);
-  return;
+  const copyResult = await telegramApi('copyMessage', payload);
+  return {
+   sentChatId: chatId,
+   sentMessageId: parseTelegramMessageId(copyResult),
+   sentViews: parseTelegramViews(copyResult?.views)
+  };
  }
 
  if (!post.text) throw new Error('Post text is required');
  const payload = { chat_id: chatId, text: post.text };
  if (replyMarkup) payload.reply_markup = replyMarkup;
- await telegramApi('sendMessage', payload);
+ const sentResult = await telegramApi('sendMessage', payload);
+ const sentChatId = sentResult?.chat?.id !== undefined && sentResult?.chat?.id !== null
+  ? String(sentResult.chat.id)
+  : chatId;
+ return {
+  sentChatId,
+  sentMessageId: parseTelegramMessageId(sentResult),
+  sentViews: parseTelegramViews(sentResult?.views)
+ };
 }
 
-function insertLog(post, status, error, trigger, dateOverride) {
+function insertLog(post, status, error, trigger, dateOverride, deliveryMeta) {
  const createdAt = new Date().toISOString();
  const date = dateOverride || createdAt.slice(0, 10);
- db.prepare('INSERT INTO logs (postId,platform,date,status,error,createdAt,trigger) VALUES (?,?,?,?,?,?,?)')
-  .run(post.id, post.platform, date, status, error || null, createdAt, trigger || 'schedule');
+ const normalizedCompanyId = Number(post?.companyId || 0) || null;
+ const companyName = normalizeText(post?.companyName) || null;
+ const sentChatId = normalizeText(deliveryMeta?.sentChatId) || null;
+ const sentMessageId = parseTelegramMessageId(deliveryMeta?.sentMessageId);
+ const sentViews = parseTelegramViews(deliveryMeta?.sentViews);
+ db.prepare(`INSERT INTO logs
+  (postId,companyId,companyName,platform,date,status,error,createdAt,trigger,publishedAt,sentChatId,sentMessageId,sentViews,viewsUpdatedAt)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ `).run(
+  post.id,
+  normalizedCompanyId,
+  companyName,
+  post.platform,
+  date,
+  status,
+  error || null,
+  createdAt,
+  trigger || 'schedule',
+  createdAt,
+  sentChatId,
+  sentMessageId,
+  sentViews,
+  sentViews !== null ? createdAt : null
+ );
+}
+
+function toHourLabel(value) {
+ if (!value) return null;
+ const parsed = new Date(value);
+ if (Number.isNaN(parsed.getTime())) return null;
+ const hh = String(parsed.getHours()).padStart(2, '0');
+ return `${hh}:00`;
+}
+
+function toDatePart(value) {
+ const text = String(value || '');
+ if (text.length < 10) return null;
+ const datePart = text.slice(0, 10);
+ return isValidDateString(datePart) ? datePart : null;
+}
+
+function buildCompanyAnalyticsReport() {
+ const companies = db.prepare(`
+  SELECT id, name
+  FROM companies
+  ORDER BY LOWER(name) ASC, id ASC
+ `).all();
+
+ const adStartRows = db.prepare(`
+  SELECT companyId, MIN(startDate) as adStartDate
+  FROM posts
+  WHERE platform = 'telegram'
+  GROUP BY companyId
+ `).all();
+
+ const adStartMap = new Map();
+ for (const row of adStartRows) {
+  const companyId = Number(row?.companyId || 0);
+  if (!companyId) continue;
+  const adStartDate = isValidDateString(row?.adStartDate) ? row.adStartDate : null;
+  adStartMap.set(companyId, adStartDate);
+ }
+
+ const statsMap = new Map();
+ for (const company of companies) {
+  const companyId = Number(company?.id || 0);
+  if (!companyId) continue;
+  statsMap.set(companyId, {
+   companyId,
+   companyName: String(company?.name || `#${companyId}`),
+   adStartDate: adStartMap.get(companyId) || null,
+   totalPublications: 0,
+   totalViews: 0,
+   publicationsWithViews: 0,
+   hotHourPublications: 0,
+   hotHourViews: 0
+  });
+ }
+
+ const sentLogs = db.prepare(`
+  SELECT
+   logs.id,
+   logs.postId,
+   logs.status,
+   logs.createdAt,
+   logs.publishedAt,
+   logs.sentViews,
+   COALESCE(logs.companyId, posts.companyId) as companyId,
+   COALESCE(logs.companyName, companies.name) as companyName
+  FROM logs
+  LEFT JOIN posts ON logs.postId = posts.id
+  LEFT JOIN companies ON COALESCE(logs.companyId, posts.companyId) = companies.id
+  WHERE logs.platform = 'telegram' AND logs.status = 'sent'
+  ORDER BY logs.id ASC
+ `).all();
+
+ const hourMap = new Map();
+ const publicationEvents = [];
+ let hasCapturedViews = false;
+
+ for (const row of sentLogs) {
+  const companyId = Number(row?.companyId || 0);
+  if (!companyId) continue;
+  const publishedAt = row?.publishedAt || row?.createdAt || null;
+  const publishedDate = toDatePart(publishedAt);
+  const adStartDate = adStartMap.get(companyId) || null;
+  if (adStartDate && publishedDate && publishedDate < adStartDate) {
+   continue;
+  }
+
+  if (!statsMap.has(companyId)) {
+   statsMap.set(companyId, {
+    companyId,
+    companyName: String(row?.companyName || `#${companyId}`),
+    adStartDate,
+    totalPublications: 0,
+    totalViews: 0,
+    publicationsWithViews: 0,
+    hotHourPublications: 0,
+    hotHourViews: 0
+   });
+  }
+
+  const stat = statsMap.get(companyId);
+  const sentViews = parseTelegramViews(row?.sentViews);
+  const hour = toHourLabel(publishedAt);
+
+  stat.totalPublications += 1;
+  if (sentViews !== null) {
+   stat.totalViews += sentViews;
+   stat.publicationsWithViews += 1;
+   hasCapturedViews = true;
+  }
+
+  if (hour) {
+   if (!hourMap.has(hour)) {
+    hourMap.set(hour, {
+     hour,
+     totalViews: 0,
+     totalPublications: 0
+    });
+   }
+   const hourRow = hourMap.get(hour);
+   hourRow.totalPublications += 1;
+   if (sentViews !== null) {
+    hourRow.totalViews += sentViews;
+   }
+   publicationEvents.push({
+    companyId,
+    hour,
+    sentViews: sentViews || 0
+   });
+  }
+ }
+
+ const hourRows = Array.from(hourMap.values());
+ let reachMetric = hasCapturedViews ? 'views' : 'publications';
+ const maxViews = hourRows.reduce((maxValue, row) => Math.max(maxValue, Number(row?.totalViews || 0)), 0);
+ if (reachMetric === 'views' && maxViews <= 0) {
+  reachMetric = 'publications';
+ }
+
+ const withReach = hourRows.map((row) => {
+  const reachValue = reachMetric === 'views'
+   ? Number(row?.totalViews || 0)
+   : Number(row?.totalPublications || 0);
+  return {
+   hour: row.hour,
+   totalViews: Number(row?.totalViews || 0),
+   totalPublications: Number(row?.totalPublications || 0),
+   reachValue
+  };
+ });
+
+ withReach.sort((a, b) => {
+  if (b.reachValue !== a.reachValue) return b.reachValue - a.reachValue;
+  if (b.totalPublications !== a.totalPublications) return b.totalPublications - a.totalPublications;
+  return String(a.hour || '').localeCompare(String(b.hour || ''), 'en');
+ });
+
+ const hottestReachValue = withReach.length ? withReach[0].reachValue : 0;
+ const hotHours = hottestReachValue > 0
+  ? withReach.filter((row) => row.reachValue === hottestReachValue)
+  : [];
+ const hotHourSet = new Set(hotHours.map((row) => row.hour));
+
+ for (const event of publicationEvents) {
+  if (!hotHourSet.has(event.hour)) continue;
+  const stat = statsMap.get(event.companyId);
+  if (!stat) continue;
+  stat.hotHourPublications += 1;
+  stat.hotHourViews += Number(event.sentViews || 0);
+ }
+
+ const companiesList = Array.from(statsMap.values()).map((row) => {
+  const totalPublications = Number(row.totalPublications || 0);
+  const totalViews = Number(row.totalViews || 0);
+  const hotHourPublications = Number(row.hotHourPublications || 0);
+  const hotHourViews = Number(row.hotHourViews || 0);
+  const totalReachValue = reachMetric === 'views' ? totalViews : totalPublications;
+  const hotHourReachValue = reachMetric === 'views' ? hotHourViews : hotHourPublications;
+  return {
+   companyId: row.companyId,
+   companyName: row.companyName,
+   adStartDate: row.adStartDate || null,
+   totalPublications,
+   totalViews,
+   totalReachValue,
+   averageViewsPerPublication: totalPublications ? Number((totalViews / totalPublications).toFixed(2)) : 0,
+   publicationsWithViews: Number(row.publicationsWithViews || 0),
+   viewCoveragePercent: totalPublications
+    ? Math.round((Number(row.publicationsWithViews || 0) / totalPublications) * 100)
+    : 0,
+   hotHourPublications,
+   hotHourViews,
+   hotHourReachValue
+  };
+ });
+
+ companiesList.sort((a, b) => {
+  if (b.totalReachValue !== a.totalReachValue) return b.totalReachValue - a.totalReachValue;
+  if (b.totalPublications !== a.totalPublications) return b.totalPublications - a.totalPublications;
+  return String(a.companyName || '').localeCompare(String(b.companyName || ''), 'en', { sensitivity: 'base' });
+ });
+
+ const totals = companiesList.reduce((acc, row) => {
+  acc.totalPublications += Number(row.totalPublications || 0);
+  acc.totalViews += Number(row.totalViews || 0);
+  return acc;
+ }, { totalPublications: 0, totalViews: 0 });
+
+ return {
+  generatedAt: new Date().toISOString(),
+  reachMetric,
+  reachMetricLabel: reachMetric === 'views' ? 'telegram_views' : 'publication_count',
+  totals: {
+   companies: companiesList.length,
+   totalPublications: totals.totalPublications,
+   totalViews: totals.totalViews,
+   totalReachValue: reachMetric === 'views' ? totals.totalViews : totals.totalPublications,
+   hotHoursCount: hotHours.length
+  },
+  hotHours,
+  topHours: withReach.slice(0, 12),
+  companies: companiesList
+ };
 }
 
 function getActiveTelegramPostsForDate(targetDate) {
@@ -808,12 +1093,12 @@ async function processDueSchedule(force = false) {
  scheduleProcessing = true;
  try {
   const settings = getSchedulerSettings();
- const minIntervalMs = Math.max(1, settings.minIntervalMinutes) * 60 * 1000;
- const lastSentAt = getSetting('lastSentAt');
- if (!force && lastSentAt) {
-  const delta = Date.now() - new Date(lastSentAt).getTime();
-  if (delta < minIntervalMs) return;
- }
+  const minIntervalMs = Math.max(1, settings.minIntervalMinutes) * 60 * 1000;
+  const lastSentAt = getSetting('lastSentAt');
+  if (!force && lastSentAt) {
+   const delta = Date.now() - new Date(lastSentAt).getTime();
+   if (delta < minIntervalMs) return;
+  }
 
   const nowIso = nowLocalIso();
   const item = db.prepare(`
@@ -841,10 +1126,13 @@ async function processDueSchedule(force = false) {
 
   const sentAt = new Date().toISOString();
   try {
-   if (item.platform === 'telegram') await sendTelegramPost(item);
+   let deliveryMeta = null;
+   if (item.platform === 'telegram') {
+    deliveryMeta = await sendTelegramPost(item);
+   }
    db.prepare('UPDATE schedule_items SET status=?, sentAt=? WHERE id=?')
     .run('sent', sentAt, item.scheduleId);
-   insertLog(item, 'sent', null, 'auto');
+   insertLog(item, 'sent', null, 'auto', null, deliveryMeta);
   } catch (e) {
    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=? WHERE id=?')
     .run('failed', sentAt, e.message, item.scheduleId);
@@ -908,8 +1196,8 @@ async function publishPostNow(postId) {
 
  try {
   if (post.platform !== 'telegram') throw new Error('Unsupported platform');
-  await sendTelegramPost(post);
-  insertLog(post, 'sent', null, 'manual');
+  const deliveryMeta = await sendTelegramPost(post);
+  insertLog(post, 'sent', null, 'manual', null, deliveryMeta);
   return { ok: true, status: 'sent' };
  } catch (e) {
   insertLog(post, 'failed', e.message, 'manual');
@@ -974,12 +1262,19 @@ db.prepare(`CREATE TABLE IF NOT EXISTS schedule_items (
 db.prepare(`CREATE TABLE IF NOT EXISTS logs (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  postId INTEGER,
+ companyId INTEGER,
+ companyName TEXT,
  platform TEXT,
  date TEXT,
  status TEXT,
  error TEXT,
  createdAt TEXT,
- trigger TEXT
+ trigger TEXT,
+ publishedAt TEXT,
+ sentChatId TEXT,
+ sentMessageId INTEGER,
+ sentViews INTEGER,
+ viewsUpdatedAt TEXT
 )`).run();
 
 db.prepare(`CREATE TABLE IF NOT EXISTS drafts (
@@ -1017,6 +1312,13 @@ ensureColumn('posts', 'linkId', 'INTEGER');
 ensureColumn('posts', 'buttons', 'TEXT');
 ensureColumn('logs', 'createdAt', 'TEXT');
 ensureColumn('logs', 'trigger', 'TEXT');
+ensureColumn('logs', 'companyId', 'INTEGER');
+ensureColumn('logs', 'companyName', 'TEXT');
+ensureColumn('logs', 'publishedAt', 'TEXT');
+ensureColumn('logs', 'sentChatId', 'TEXT');
+ensureColumn('logs', 'sentMessageId', 'INTEGER');
+ensureColumn('logs', 'sentViews', 'INTEGER');
+ensureColumn('logs', 'viewsUpdatedAt', 'TEXT');
 
 ensureColumn('drafts', 'source', 'TEXT');
 ensureColumn('drafts', 'chatId', 'TEXT');
@@ -1491,6 +1793,14 @@ app.post('/telegram/pull', async (req, res) => {
  }
 });
 
+app.get('/analytics/companies', (_, res) => {
+ try {
+  res.send(buildCompanyAnalyticsReport());
+ } catch (e) {
+  res.status(500).send({ ok: false, error: e.message });
+ }
+});
+
 app.get('/logs', (_, res) => res.send(db.prepare(`
  SELECT logs.*,
   posts.text as postText,
@@ -1498,12 +1808,12 @@ app.get('/logs', (_, res) => res.send(db.prepare(`
   posts.platform as postPlatform,
   drafts.mediaType as draftMediaType,
   drafts.caption as draftCaption,
-  companies.name as companyName
+  COALESCE(logs.companyName, companies.name) as companyName
  FROM logs
  LEFT JOIN posts ON logs.postId = posts.id
  LEFT JOIN drafts ON posts.draftId = drafts.id
- LEFT JOIN companies ON posts.companyId = companies.id
- WHERE posts.platform = 'telegram'
+ LEFT JOIN companies ON COALESCE(logs.companyId, posts.companyId) = companies.id
+ WHERE logs.platform = 'telegram'
  ORDER BY logs.id DESC
 `).all()));
 

@@ -1092,19 +1092,32 @@
       width: 100%;
       border-collapse: collapse;
       font-size: 13px;
-      min-width: 640px;
+      min-width: 580px;
     }
 
     thead {
       background: rgba(12, 18, 36, 0.85);
     }
 
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      background: rgba(12, 18, 36, 0.95);
+      backdrop-filter: blur(4px);
+    }
+
     th, td {
-      padding: 12px;
+      padding: 10px;
       text-align: left;
       border-bottom: 1px solid rgba(120, 130, 170, 0.2);
       vertical-align: top;
       white-space: nowrap;
+    }
+
+    .cell-wrap {
+      white-space: normal;
+      line-height: 1.35;
     }
 
     tbody tr:hover {
@@ -1268,8 +1281,7 @@
     }
 
     .posts-by-company-list {
-      display: grid;
-      gap: 10px;
+      display: none;
     }
 
     .company-post-card {
@@ -1338,6 +1350,61 @@
       align-items: center;
     }
 
+    .company-posts-row td {
+      background: rgba(10, 14, 28, 0.85);
+      border-bottom: 1px solid rgba(120, 130, 170, 0.28);
+    }
+
+    .company-posts-box {
+      display: grid;
+      gap: 8px;
+      padding: 2px;
+    }
+
+    .company-posts-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .company-posts-head strong {
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .company-posts-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .company-posts-item {
+      border: 1px solid rgba(124, 136, 179, 0.25);
+      border-radius: 9px;
+      background: rgba(8, 12, 26, 0.58);
+      padding: 8px 10px;
+      display: grid;
+      gap: 5px;
+    }
+
+    .company-posts-item-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+    }
+
+    .company-posts-pagination {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
     .posts-empty {
       border: 1px dashed rgba(124, 136, 179, 0.35);
       border-radius: var(--radius-sm);
@@ -1380,6 +1447,14 @@
 
     body[data-density="compact"] .runtime-summary-item {
       padding: 6px 7px;
+    }
+
+    body[data-density="compact"] .company-posts-item {
+      padding: 6px 8px;
+    }
+
+    body[data-density="compact"] .list-pagination {
+      padding: 6px 8px;
     }
 
     .runtime-summary {
@@ -2020,8 +2095,8 @@
             <label class="field">
               <span>Righe per pagina</span>
               <select id="companiesPageSize" class="native-select">
-                <option value="12">12</option>
-                <option value="24">24</option>
+                <option value="10">10</option>
+                <option value="20">20</option>
                 <option value="50">50</option>
                 <option value="100">100</option>
               </select>
@@ -2166,15 +2241,15 @@
             <label class="field">
               <span>Righe per pagina</span>
               <select id="postsPageSize" class="native-select">
-                <option value="14">14</option>
-                <option value="28">28</option>
+                <option value="10">10</option>
+                <option value="20">20</option>
                 <option value="50">50</option>
                 <option value="100">100</option>
               </select>
             </label>
             <button class="btn ghost toolbar-action" type="button" id="clearPostsFilterBtn">Reset filtri</button>
           </div>
-          <div id="postsByCompanyList" class="posts-by-company-list"></div>
+          <div class="hint">Post per azienda ora nel blocco Aziende: usa il pulsante "Post" per aprire/chiudere.</div>
           <div class="table-wrap">
             <table>
               <thead>
@@ -2223,8 +2298,8 @@
               <select id="schedulePageSize" class="native-select">
                 <option value="20">20</option>
                 <option value="40">40</option>
-                <option value="80">80</option>
-                <option value="150">150</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
               </select>
             </label>
             <button class="btn ghost toolbar-action" id="scheduleTodayBtn" type="button">Oggi</button>
@@ -2336,10 +2411,13 @@
       companiesPage: 1,
       postsPage: 1,
       schedulePage: 1,
-      companiesPageSize: 12,
-      postsPageSize: 14,
-      schedulePageSize: 20,
+      companiesPageSize: 20,
+      postsPageSize: 20,
+      schedulePageSize: 40,
       postsByCompanyVisible: {},
+      companyPostsExpanded: {},
+      companyPostsPage: {},
+      companyPostsPageSize: 5,
       uiDensity: loadUiDensity()
     };
     const POST_DRAFT_STORAGE_KEY = 'yosupport_post_form_draft_v1';
@@ -2347,9 +2425,9 @@
     const POST_DRAFT_DEBOUNCE_MS = 250;
     const MAX_POST_BUTTONS = 8;
     const MAX_POST_BUTTON_TEXT_LENGTH = 64;
-    const COMPANIES_PAGE_SIZE = 12;
-    const POSTS_PAGE_SIZE = 14;
-    const SCHEDULE_PAGE_SIZE = 20;
+    const COMPANIES_PAGE_SIZE = 20;
+    const POSTS_PAGE_SIZE = 20;
+    const SCHEDULE_PAGE_SIZE = 40;
     const COMPANY_POST_PREVIEW_DEFAULT = 3;
     const COMPANY_POST_PREVIEW_STEP = 5;
     const API_AUTH_STORAGE_KEY = 'yosupport_api_basic_auth_v1';
@@ -3653,6 +3731,13 @@
         state.companies = companies || [];
         state.drafts = drafts || [];
         state.posts = posts || [];
+        const companyIds = new Set(state.companies.map((company) => Number(company.id || 0)));
+        state.companyPostsExpanded = Object.fromEntries(
+          Object.entries(state.companyPostsExpanded || {}).filter(([companyId, expanded]) => companyIds.has(Number(companyId)) && Boolean(expanded))
+        );
+        state.companyPostsPage = Object.fromEntries(
+          Object.entries(state.companyPostsPage || {}).filter(([companyId]) => companyIds.has(Number(companyId)))
+        );
         const availableCompanyIds = new Set(state.posts.map((post) => Number(post.companyId || 0)));
         state.postsByCompanyVisible = Object.fromEntries(
           Object.entries(state.postsByCompanyVisible || {}).filter(([companyId]) => availableCompanyIds.has(Number(companyId)))
@@ -3805,9 +3890,11 @@
       container.innerHTML = `
         <div class="pagination-summary">${escapeHtml(summary)}</div>
         <div class="pagination-actions">
+          <button class="btn xs ghost" type="button" data-action="page-first" data-target="${escapeHtml(target)}" ${pagination.page <= 1 ? 'disabled' : ''}>«</button>
           <button class="btn xs ghost" type="button" data-action="page-prev" data-target="${escapeHtml(target)}" ${pagination.page <= 1 ? 'disabled' : ''}>Prev</button>
           <span class="muted">Pagina ${escapeHtml(String(pagination.page))}/${escapeHtml(String(pagination.totalPages))}</span>
           <button class="btn xs ghost" type="button" data-action="page-next" data-target="${escapeHtml(target)}" ${pagination.page >= pagination.totalPages ? 'disabled' : ''}>Next</button>
+          <button class="btn xs ghost" type="button" data-action="page-last" data-target="${escapeHtml(target)}" ${pagination.page >= pagination.totalPages ? 'disabled' : ''}>»</button>
         </div>
       `;
     }
@@ -3826,27 +3913,92 @@
       if (els.companiesPageSize && String(els.companiesPageSize.value || '') !== String(pageSize)) {
         els.companiesPageSize.value = String(pageSize);
       }
-      els.companiesTable.innerHTML = pagination.items.map((company) => {
+      const companyRows = [];
+      pagination.items.forEach((company) => {
+        const companyId = Number(company.id || 0);
         const tier = Number(company.premium) === 1
           ? '<span class="premium-tag">Premium x1.5</span>'
           : '<span class="muted">Standard</span>';
-        return `
+        const isExpanded = Boolean(state.companyPostsExpanded?.[companyId]);
+        const companyPosts = getCompanyPosts(companyId);
+        const postsCount = companyPosts.length;
+        const postsPage = Number(state.companyPostsPage?.[companyId] || 1);
+        const postsPagination = paginateRows(companyPosts, postsPage, state.companyPostsPageSize);
+        state.companyPostsPage = {
+          ...(state.companyPostsPage || {}),
+          [companyId]: postsPagination.page
+        };
+        companyRows.push(`
           <tr>
             <td>#${company.id}</td>
             <td>${escapeHtml(company.name)}</td>
             <td>${tier}</td>
             <td>${escapeHtml(company.preferredTime || '-')}</td>
-            <td>${company.postCount || 0}</td>
+            <td>${postsCount}</td>
             <td>
               <div class="row">
-                <button class="btn xs ghost" data-action="company-focus-posts" data-id="${company.id}">Post</button>
+                <button class="btn xs ghost" data-action="company-toggle-posts" data-id="${company.id}">
+                  ${isExpanded ? 'Chiudi Post' : `Post (${postsCount})`}
+                </button>
                 <button class="btn xs" data-action="company-edit" data-id="${company.id}">Modifica</button>
                 <button class="btn xs ghost" data-action="company-delete" data-id="${company.id}">Elimina</button>
               </div>
             </td>
           </tr>
-        `;
-      }).join('') || '<tr><td colspan="6" class="muted">Nessuna azienda presente.</td></tr>';
+        `);
+
+        if (!isExpanded) return;
+
+        const postsItems = postsPagination.items.map((post) => {
+          const status = getPostStatus(post);
+          const content = summarizePostContent(post);
+          return `
+            <article class="company-posts-item">
+              <div class="company-posts-item-top">
+                <div>#${post.id} • ${escapeHtml(status.label)}</div>
+                <div class="muted">${escapeHtml(post.startDate)} → ${escapeHtml(post.endDate)}</div>
+              </div>
+              <div class="cell-wrap">${escapeHtml(content.label)} • ${escapeHtml(shorten(content.preview, 120))}</div>
+              <div class="row">
+                <button class="btn xs" type="button" data-action="company-post-edit" data-id="${post.id}">Modifica</button>
+                <button class="btn xs ghost" type="button" data-action="company-post-duplicate" data-id="${post.id}">Duplica</button>
+                <button class="btn xs ghost" type="button" data-action="company-post-publish" data-id="${post.id}">Pubblica</button>
+              </div>
+            </article>
+          `;
+        }).join('') || '<div class="posts-empty">Nessun post per questa azienda.</div>';
+
+        const paginationLine = postsCount > 0
+          ? `Mostrati ${postsPagination.from}-${postsPagination.to} di ${postsPagination.totalItems}`
+          : 'Nessun post disponibile';
+
+        const postsPager = postsPagination.totalItems > 0 ? `
+          <div class="company-posts-pagination">
+            <span class="muted">${escapeHtml(paginationLine)}</span>
+            <button class="btn xs ghost" type="button" data-action="company-posts-first" data-id="${companyId}" ${postsPagination.page <= 1 ? 'disabled' : ''}>«</button>
+            <button class="btn xs ghost" type="button" data-action="company-posts-prev" data-id="${companyId}" ${postsPagination.page <= 1 ? 'disabled' : ''}>Prev</button>
+            <span class="muted">Pagina ${postsPagination.page}/${postsPagination.totalPages}</span>
+            <button class="btn xs ghost" type="button" data-action="company-posts-next" data-id="${companyId}" ${postsPagination.page >= postsPagination.totalPages ? 'disabled' : ''}>Next</button>
+            <button class="btn xs ghost" type="button" data-action="company-posts-last" data-id="${companyId}" ${postsPagination.page >= postsPagination.totalPages ? 'disabled' : ''}>»</button>
+          </div>
+        ` : '';
+
+        companyRows.push(`
+          <tr class="company-posts-row">
+            <td colspan="6">
+              <div class="company-posts-box">
+                <div class="company-posts-head">
+                  <strong>Post azienda: ${escapeHtml(company.name)}</strong>
+                  <button class="btn xs ghost" type="button" data-action="company-focus-posts" data-id="${company.id}">Apri tab Post</button>
+                </div>
+                <div class="company-posts-list">${postsItems}</div>
+                ${postsPager}
+              </div>
+            </td>
+          </tr>
+        `);
+      });
+      els.companiesTable.innerHTML = companyRows.join('') || '<tr><td colspan="6" class="muted">Nessuna azienda presente.</td></tr>';
       renderPagination(els.companiesPagination, pagination, 'companies');
       refreshCustomSelect(els.companiesTypeFilter);
       refreshCustomSelect(els.companiesPageSize);
@@ -3937,6 +4089,7 @@
     }
 
     function renderPostsByCompany(posts) {
+      if (!els.postsByCompanyList) return;
       const selectedCompanyId = Number(state.postsCompanyFilter || 0);
       const sortedCompanies = sortCompaniesAlphabetically(state.companies);
       const postsByCompanyId = new Map();
@@ -4037,7 +4190,9 @@
       }
       refreshCustomSelect(els.postsStatusFilter);
       refreshCustomSelect(els.postsPageSize);
-      renderPostsByCompany(filteredPosts);
+      if (els.postsByCompanyList) {
+        els.postsByCompanyList.innerHTML = '';
+      }
 
       els.postsTable.innerHTML = visiblePosts.map((post) => {
         const period = `${post.startDate} → ${post.endDate}`;
@@ -4052,11 +4207,11 @@
               <div>${escapeHtml(post.companyName || '-')} ${premiumTag}</div>
               <div class="muted">${activePill}</div>
             </td>
-            <td>
+            <td class="cell-wrap">
               <div>${escapeHtml(content.label)}</div>
               <div class="muted">${escapeHtml(shorten(content.preview, 56))}</div>
             </td>
-            <td>${escapeHtml(period)}</td>
+            <td class="cell-wrap">${escapeHtml(period)}</td>
             <td>
               <div class="row">
                 <button class="btn xs" data-action="post-edit" data-id="${post.id}">Modifica</button>
@@ -4137,7 +4292,7 @@
         return `
           <tr>
             <td>${escapeHtml(time)}</td>
-            <td>
+            <td class="cell-wrap">
               <div>${escapeHtml(postLabel)}${postId ? ` <span class="muted">#${postId}</span>` : ''}</div>
               <div class="muted">${escapeHtml(shorten(summary, 36))}</div>
             </td>
@@ -4494,6 +4649,44 @@
       renderPosts();
     }
 
+    function getCompanyPosts(companyId) {
+      const normalizedId = Number(companyId || 0);
+      if (!normalizedId) return [];
+      return sortPostsAlphabetically(
+        state.posts.filter((post) => Number(post.companyId) === normalizedId)
+      );
+    }
+
+    function toggleCompanyPosts(companyId) {
+      const normalizedId = Number(companyId || 0);
+      if (!normalizedId) return;
+      const current = Boolean(state.companyPostsExpanded?.[normalizedId]);
+      state.companyPostsExpanded = {
+        ...(state.companyPostsExpanded || {}),
+        [normalizedId]: !current
+      };
+      if (!current) {
+        state.companyPostsPage = {
+          ...(state.companyPostsPage || {}),
+          [normalizedId]: 1
+        };
+      }
+      renderCompanies();
+    }
+
+    function setCompanyPostsPage(companyId, nextPage) {
+      const normalizedId = Number(companyId || 0);
+      if (!normalizedId) return;
+      const posts = getCompanyPosts(normalizedId);
+      const totalPages = paginateRows(posts, nextPage, state.companyPostsPageSize).totalPages;
+      const normalizedPage = Math.min(Math.max(1, Number(nextPage || 1)), totalPages);
+      state.companyPostsPage = {
+        ...(state.companyPostsPage || {}),
+        [normalizedId]: normalizedPage
+      };
+      renderCompanies();
+    }
+
     function setPostsCompanyCardLimit(companyId, nextLimit) {
       const normalizedId = Number(companyId || 0);
       if (!normalizedId) return;
@@ -4552,24 +4745,28 @@
 
     function handlePaginationAction(target, action) {
       if (!target || !action) return;
+      const applyPageAction = (currentPage, totalPages) => {
+        if (action === 'page-first') return 1;
+        if (action === 'page-prev') return Math.max(1, currentPage - 1);
+        if (action === 'page-next') return Math.min(totalPages, currentPage + 1);
+        if (action === 'page-last') return totalPages;
+        return currentPage;
+      };
       if (target === 'companies') {
         const totalPages = paginateRows(getFilteredCompanies(), state.companiesPage, state.companiesPageSize || COMPANIES_PAGE_SIZE).totalPages;
-        if (action === 'page-prev') state.companiesPage = Math.max(1, state.companiesPage - 1);
-        if (action === 'page-next') state.companiesPage = Math.min(totalPages, state.companiesPage + 1);
+        state.companiesPage = applyPageAction(state.companiesPage, totalPages);
         renderCompanies();
         return;
       }
       if (target === 'posts') {
         const totalPages = paginateRows(getFilteredPosts(), state.postsPage, state.postsPageSize || POSTS_PAGE_SIZE).totalPages;
-        if (action === 'page-prev') state.postsPage = Math.max(1, state.postsPage - 1);
-        if (action === 'page-next') state.postsPage = Math.min(totalPages, state.postsPage + 1);
+        state.postsPage = applyPageAction(state.postsPage, totalPages);
         renderPosts();
         return;
       }
       if (target === 'schedule') {
         const totalPages = paginateRows(getFilteredScheduleItems(), state.schedulePage, state.schedulePageSize || SCHEDULE_PAGE_SIZE).totalPages;
-        if (action === 'page-prev') state.schedulePage = Math.max(1, state.schedulePage - 1);
-        if (action === 'page-next') state.schedulePage = Math.min(totalPages, state.schedulePage + 1);
+        state.schedulePage = applyPageAction(state.schedulePage, totalPages);
         renderSchedule();
       }
     }
@@ -4838,10 +5035,45 @@
       const action = event.target?.dataset?.action;
       const id = Number(event.target?.dataset?.id || 0);
       if (!action || !id) return;
+      if (action === 'company-toggle-posts') {
+        toggleCompanyPosts(id);
+        return;
+      }
       if (action === 'company-focus-posts') {
         setPostsCompanyFilter(id);
         focusPanel(els.postsPanel, els.postsSearch);
         setStatus(`Filtro post impostato su azienda #${id}.`, 'success');
+        return;
+      }
+      if (action === 'company-post-edit') {
+        handlePostAction('post-edit', id);
+        return;
+      }
+      if (action === 'company-post-duplicate') {
+        handlePostAction('post-duplicate', id);
+        return;
+      }
+      if (action === 'company-post-publish') {
+        handlePostAction('post-publish', id);
+        return;
+      }
+      if (action === 'company-posts-first') {
+        setCompanyPostsPage(id, 1);
+        return;
+      }
+      if (action === 'company-posts-prev') {
+        const current = Number(state.companyPostsPage?.[id] || 1);
+        setCompanyPostsPage(id, current - 1);
+        return;
+      }
+      if (action === 'company-posts-next') {
+        const current = Number(state.companyPostsPage?.[id] || 1);
+        setCompanyPostsPage(id, current + 1);
+        return;
+      }
+      if (action === 'company-posts-last') {
+        const totalPages = paginateRows(getCompanyPosts(id), Number.MAX_SAFE_INTEGER, state.companyPostsPageSize).totalPages;
+        setCompanyPostsPage(id, totalPages);
         return;
       }
       const company = state.companies.find((item) => item.id === id);
@@ -4871,29 +5103,31 @@
       handlePostAction(action, id);
     });
 
-    els.postsByCompanyList.addEventListener('click', (event) => {
-      const action = event.target?.dataset?.action;
-      const id = Number(event.target?.dataset?.id || 0);
-      if (!action) return;
-      if (action === 'posts-filter-company' && id) {
-        setPostsCompanyFilter(id);
-        return;
-      }
-      if (action === 'posts-clear-filter') {
-        setPostsCompanyFilter(0);
-        return;
-      }
-      if (action === 'posts-company-more' && id) {
-        const currentLimit = Number(state.postsByCompanyVisible?.[id] || COMPANY_POST_PREVIEW_DEFAULT);
-        setPostsCompanyCardLimit(id, currentLimit + COMPANY_POST_PREVIEW_STEP);
-        return;
-      }
-      if (action === 'posts-company-less' && id) {
-        collapsePostsCompanyCard(id);
-        return;
-      }
-      handlePostAction(action, id);
-    });
+    if (els.postsByCompanyList) {
+      els.postsByCompanyList.addEventListener('click', (event) => {
+        const action = event.target?.dataset?.action;
+        const id = Number(event.target?.dataset?.id || 0);
+        if (!action) return;
+        if (action === 'posts-filter-company' && id) {
+          setPostsCompanyFilter(id);
+          return;
+        }
+        if (action === 'posts-clear-filter') {
+          setPostsCompanyFilter(0);
+          return;
+        }
+        if (action === 'posts-company-more' && id) {
+          const currentLimit = Number(state.postsByCompanyVisible?.[id] || COMPANY_POST_PREVIEW_DEFAULT);
+          setPostsCompanyCardLimit(id, currentLimit + COMPANY_POST_PREVIEW_STEP);
+          return;
+        }
+        if (action === 'posts-company-less' && id) {
+          collapsePostsCompanyCard(id);
+          return;
+        }
+        handlePostAction(action, id);
+      });
+    }
 
     if (els.scheduleTable) {
       els.scheduleTable.addEventListener('click', (event) => {

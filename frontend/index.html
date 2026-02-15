@@ -1882,7 +1882,7 @@
             <button class="btn ghost" id="useLatestDraftBtn" type="button">Usa ultima</button>
           </div>
           <div id="draftsList" class="drafts-list"></div>
-          <p class="hint">Le bozze compaiono dopo la sincronizzazione. Premi Usa e il post verrà collegato subito alla bozza selezionata.</p>
+          <p class="hint">Le bozze compaiono dopo la sincronizzazione. Premi Usa: testo e pulsanti (se presenti) verranno importati automaticamente nel compositore.</p>
         </div>
 
         <div class="panel span-7 allow-overflow" id="postComposerPanel">
@@ -2503,9 +2503,11 @@
     function useDraftInPostForm(draft) {
       if (!draft) return;
       els.postDraft.value = String(draft.id);
+      const draftButtons = parsePostButtons(draft.buttons);
       if (!els.postText.value) {
         els.postText.value = draft.caption || draft.text || '';
       }
+      setPostButtons(draftButtons);
       renderDrafts();
       updatePostChecklist();
       schedulePostDraftSave();
@@ -3413,12 +3415,16 @@
       const selectedDraftId = Number(selectedDraftValue || 0);
       const filtered = state.drafts.filter((draft) => {
         if (!query) return true;
+        const buttonSearch = parsePostButtons(draft.buttons)
+          .map((button) => `${button.text || ''} ${button.url || ''}`)
+          .join(' ');
         const haystack = [
           draft.id,
           draft.mediaType,
           draft.caption,
           draft.text,
-          draft.fileName
+          draft.fileName,
+          buttonSearch
         ].map((part) => String(part || '').toLowerCase()).join(' ');
         return haystack.includes(query);
       });
@@ -3427,6 +3433,7 @@
         const preview = draft.caption || draft.text || '';
         const isActive = selectedDraftId === Number(draft.id);
         const previewText = preview ? shorten(preview, 220) : 'Nessun testo in questa bozza';
+        const draftButtons = parsePostButtons(draft.buttons);
         const mediaUrl = resolveDraftMediaUrl(draft.filePath);
         const mediaType = String(draft.mediaType || '').toLowerCase();
         const mediaPreview = mediaUrl && mediaType === 'photo'
@@ -3434,6 +3441,9 @@
           : mediaUrl && mediaType === 'video'
             ? `<div class="draft-card-media"><video src="${escapeHtml(mediaUrl)}" controls preload="metadata"></video></div>`
             : '';
+        const buttonsMeta = draftButtons.length
+          ? `<div class="draft-card-file">Pulsanti: ${draftButtons.length}</div>`
+          : '';
         const fileMeta = draft.fileName
           ? `<div class="draft-card-file">${escapeHtml(draft.fileName)}</div>`
           : '';
@@ -3450,6 +3460,7 @@
             </div>
             ${mediaPreview}
             <div class="draft-card-text">${escapeHtml(previewText)}</div>
+            ${buttonsMeta}
             ${fileMeta}
           </article>
         `;
@@ -4029,12 +4040,16 @@
       const query = String(state.draftSearch || '').trim().toLowerCase();
       const latest = state.drafts.find((draft) => {
         if (!query) return true;
+        const buttonSearch = parsePostButtons(draft.buttons)
+          .map((button) => `${button.text || ''} ${button.url || ''}`)
+          .join(' ');
         const haystack = [
           draft.id,
           draft.mediaType,
           draft.caption,
           draft.text,
-          draft.fileName
+          draft.fileName,
+          buttonSearch
         ].map((part) => String(part || '').toLowerCase()).join(' ');
         return haystack.includes(query);
       });

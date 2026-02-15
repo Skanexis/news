@@ -160,6 +160,66 @@ function normalizePostButtonsInput(value) {
  });
 }
 
+function toHttpUrl(value) {
+ const normalized = normalizeUrl(value);
+ if (!normalized) return null;
+ if (isHttpUrl(normalized)) return normalized;
+ if (/^www\./i.test(normalized) || /^[^\s]+\.[^\s]+/.test(normalized)) {
+  const withScheme = `https://${normalized.replace(/^\/+/, '')}`;
+  if (isHttpUrl(withScheme)) return withScheme;
+ }
+ return null;
+}
+
+function extractButtonsFromReplyMarkup(replyMarkup) {
+ if (!replyMarkup || !Array.isArray(replyMarkup.inline_keyboard)) return [];
+ const buttons = [];
+ for (const row of replyMarkup.inline_keyboard) {
+  if (!Array.isArray(row)) continue;
+  for (const item of row) {
+   if (!item || typeof item !== 'object') continue;
+   const text = normalizeText(item.text);
+   const url = toHttpUrl(item.url);
+   if (!text || !url) continue;
+   buttons.push({
+    text: text.slice(0, MAX_POST_BUTTON_TEXT_LENGTH),
+    url
+   });
+   if (buttons.length >= MAX_POST_BUTTONS) return buttons;
+  }
+ }
+ return buttons;
+}
+
+function extractButtonsFromEntities(sourceText, entities) {
+ const source = String(sourceText || '');
+ if (!source || !Array.isArray(entities) || !entities.length) return [];
+ const buttons = [];
+ for (const entity of entities) {
+  if (!entity || typeof entity !== 'object') continue;
+  const offset = Number(entity.offset);
+  const length = Number(entity.length);
+  if (!Number.isInteger(offset) || !Number.isInteger(length) || offset < 0 || length <= 0) continue;
+  const label = normalizeText(source.slice(offset, offset + length));
+  let rawUrl = null;
+  if (entity.type === 'text_link') {
+   rawUrl = entity.url;
+  } else if (entity.type === 'url') {
+   rawUrl = source.slice(offset, offset + length);
+  } else {
+   continue;
+  }
+  const url = toHttpUrl(rawUrl);
+  if (!url) continue;
+  buttons.push({
+   text: (label || url).slice(0, MAX_POST_BUTTON_TEXT_LENGTH),
+   url
+  });
+  if (buttons.length >= MAX_POST_BUTTONS) return buttons;
+ }
+ return buttons;
+}
+
 function getCtaUrl(post) {
  return normalizeUrl(post.ctaUrl) || null;
 }
@@ -344,6 +404,14 @@ async function handleTelegramMessage(message) {
  const messageId = message.message_id;
  const text = normalizeText(message.text);
  const caption = normalizeText(message.caption);
+ const markupButtons = extractButtonsFromReplyMarkup(message.reply_markup);
+ const entitySourceText = message.caption || message.text || '';
+ const entityList = Array.isArray(message.caption_entities) && message.caption_entities.length
+  ? message.caption_entities
+  : Array.isArray(message.entities) ? message.entities : [];
+ const entityButtons = extractButtonsFromEntities(entitySourceText, entityList);
+ const parsedButtons = markupButtons.length ? markupButtons : entityButtons;
+ const buttonsJson = parsedButtons.length ? JSON.stringify(parsedButtons) : null;
  let mediaType = 'text';
  let fileId = null;
  let fileUniqueId = null;
@@ -391,16 +459,16 @@ async function handleTelegramMessage(message) {
 
  if (existing) {
   db.prepare(`UPDATE drafts SET
-   mediaType = ?, text = ?, caption = ?, fileId = ?, fileUniqueId = ?, fileName = ?, mimeType = ?, filePath = ?, createdAt = ?
+   mediaType = ?, text = ?, caption = ?, fileId = ?, fileUniqueId = ?, fileName = ?, mimeType = ?, filePath = ?, buttons = ?, createdAt = ?
    WHERE id = ?
-  `).run(mediaType, text, caption, fileId, fileUniqueId, fileName, mimeType, filePath, createdAt, existing.id);
+  `).run(mediaType, text, caption, fileId, fileUniqueId, fileName, mimeType, filePath, buttonsJson, createdAt, existing.id);
   return existing.id;
  }
 
  const result = db.prepare(`INSERT INTO drafts
-  (source, chatId, messageId, mediaType, text, caption, fileId, fileUniqueId, fileName, mimeType, filePath, createdAt)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
- `).run('telegram', chatId, messageId, mediaType, text, caption, fileId, fileUniqueId, fileName, mimeType, filePath, createdAt);
+  (source, chatId, messageId, mediaType, text, caption, fileId, fileUniqueId, fileName, mimeType, filePath, buttons, createdAt)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+ `).run('telegram', chatId, messageId, mediaType, text, caption, fileId, fileUniqueId, fileName, mimeType, filePath, buttonsJson, createdAt);
  return result.lastInsertRowid;
 }
 
@@ -775,6 +843,7 @@ db.prepare(`CREATE TABLE IF NOT EXISTS drafts (
  fileName TEXT,
  mimeType TEXT,
  filePath TEXT,
+ buttons TEXT,
  createdAt TEXT
 )`).run();
 
@@ -807,6 +876,7 @@ ensureColumn('drafts', 'fileUniqueId', 'TEXT');
 ensureColumn('drafts', 'fileName', 'TEXT');
 ensureColumn('drafts', 'mimeType', 'TEXT');
 ensureColumn('drafts', 'filePath', 'TEXT');
+ensureColumn('drafts', 'buttons', 'TEXT');
 ensureColumn('drafts', 'createdAt', 'TEXT');
 
 app.use('/uploads', express.static(uploadsDir));
@@ -1211,9 +1281,15 @@ app.get('/schedule/items', (req, res) => {
  res.send(rows);
 });
 
-app.get('/drafts', (_, res) => res.send(db.prepare(`
- SELECT * FROM drafts ORDER BY createdAt DESC, id DESC
-`).all()));
+app.get('/drafts', (_, res) => {
+ const rows = db.prepare(`
+  SELECT * FROM drafts ORDER BY createdAt DESC, id DESC
+ `).all();
+ res.send(rows.map((row) => ({
+  ...row,
+  buttons: parseStoredButtons(row.buttons)
+ })));
+});
 
 app.delete('/drafts/:id', (req, res) => {
  const id = Number(req.params.id);

@@ -1374,6 +1374,57 @@
       color: var(--text);
     }
 
+    .company-posts-head-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      margin-left: auto;
+    }
+
+    .company-posts-size {
+      border: 1px solid rgba(124, 136, 179, 0.35);
+      border-radius: 8px;
+      background: rgba(8, 12, 26, 0.9);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      padding: 5px 8px;
+      min-width: 84px;
+    }
+
+    .company-posts-top-nav {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 4px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(124, 136, 179, 0.25);
+      background: rgba(8, 12, 26, 0.55);
+    }
+
+    .company-posts-scroll {
+      max-height: 360px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+
+    .company-posts-scroll::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    .company-posts-scroll::-webkit-scrollbar-track {
+      background: rgba(8, 12, 26, 0.9);
+    }
+
+    .company-posts-scroll::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, rgba(79, 111, 220, 0.7), rgba(42, 163, 199, 0.6));
+      border-radius: 999px;
+    }
+
     .company-posts-list {
       display: grid;
       gap: 8px;
@@ -1451,6 +1502,16 @@
 
     body[data-density="compact"] .company-posts-item {
       padding: 6px 8px;
+    }
+
+    body[data-density="compact"] .company-posts-scroll {
+      max-height: 300px;
+    }
+
+    body[data-density="compact"] .company-posts-size {
+      font-size: 11px;
+      padding: 4px 7px;
+      min-width: 74px;
     }
 
     body[data-density="compact"] .list-pagination {
@@ -2417,7 +2478,7 @@
       postsByCompanyVisible: {},
       companyPostsExpanded: {},
       companyPostsPage: {},
-      companyPostsPageSize: 5,
+      companyPostsPageSizeByCompany: {},
       uiDensity: loadUiDensity()
     };
     const POST_DRAFT_STORAGE_KEY = 'yosupport_post_form_draft_v1';
@@ -2430,6 +2491,7 @@
     const SCHEDULE_PAGE_SIZE = 40;
     const COMPANY_POST_PREVIEW_DEFAULT = 3;
     const COMPANY_POST_PREVIEW_STEP = 5;
+    const COMPANY_POSTS_PAGE_SIZE_DEFAULT = 4;
     const API_AUTH_STORAGE_KEY = 'yosupport_api_basic_auth_v1';
     let postDraftRestoreDone = false;
     let savingPost = false;
@@ -3738,6 +3800,12 @@
         state.companyPostsPage = Object.fromEntries(
           Object.entries(state.companyPostsPage || {}).filter(([companyId]) => companyIds.has(Number(companyId)))
         );
+        state.companyPostsPageSizeByCompany = Object.fromEntries(
+          Object.entries(state.companyPostsPageSizeByCompany || {}).filter(([companyId, pageSize]) => {
+            const normalizedPageSize = Number(pageSize || 0);
+            return companyIds.has(Number(companyId)) && normalizedPageSize > 0;
+          })
+        );
         const availableCompanyIds = new Set(state.posts.map((post) => Number(post.companyId || 0)));
         state.postsByCompanyVisible = Object.fromEntries(
           Object.entries(state.postsByCompanyVisible || {}).filter(([companyId]) => availableCompanyIds.has(Number(companyId)))
@@ -3923,7 +3991,8 @@
         const companyPosts = getCompanyPosts(companyId);
         const postsCount = companyPosts.length;
         const postsPage = Number(state.companyPostsPage?.[companyId] || 1);
-        const postsPagination = paginateRows(companyPosts, postsPage, state.companyPostsPageSize);
+        const companyPostsPageSize = getCompanyPostsPageSize(companyId);
+        const postsPagination = paginateRows(companyPosts, postsPage, companyPostsPageSize);
         state.companyPostsPage = {
           ...(state.companyPostsPage || {}),
           [companyId]: postsPagination.page
@@ -3972,14 +4041,24 @@
           ? `Mostrati ${postsPagination.from}-${postsPagination.to} di ${postsPagination.totalItems}`
           : 'Nessun post disponibile';
 
-        const postsPager = postsPagination.totalItems > 0 ? `
+        const pagerButtons = postsPagination.totalItems > 0 ? `
+          <button class="btn xs ghost" type="button" data-action="company-posts-first" data-id="${companyId}" ${postsPagination.page <= 1 ? 'disabled' : ''}>«</button>
+          <button class="btn xs ghost" type="button" data-action="company-posts-prev" data-id="${companyId}" ${postsPagination.page <= 1 ? 'disabled' : ''}>Prev</button>
+          <span class="muted">Pagina ${postsPagination.page}/${postsPagination.totalPages}</span>
+          <button class="btn xs ghost" type="button" data-action="company-posts-next" data-id="${companyId}" ${postsPagination.page >= postsPagination.totalPages ? 'disabled' : ''}>Next</button>
+          <button class="btn xs ghost" type="button" data-action="company-posts-last" data-id="${companyId}" ${postsPagination.page >= postsPagination.totalPages ? 'disabled' : ''}>»</button>
+        ` : '';
+
+        const postsPagerTop = postsPagination.totalItems > 0 ? `
+          <div class="company-posts-top-nav">
+            ${pagerButtons}
+          </div>
+        ` : '';
+
+        const postsPagerBottom = postsPagination.totalItems > 0 ? `
           <div class="company-posts-pagination">
             <span class="muted">${escapeHtml(paginationLine)}</span>
-            <button class="btn xs ghost" type="button" data-action="company-posts-first" data-id="${companyId}" ${postsPagination.page <= 1 ? 'disabled' : ''}>«</button>
-            <button class="btn xs ghost" type="button" data-action="company-posts-prev" data-id="${companyId}" ${postsPagination.page <= 1 ? 'disabled' : ''}>Prev</button>
-            <span class="muted">Pagina ${postsPagination.page}/${postsPagination.totalPages}</span>
-            <button class="btn xs ghost" type="button" data-action="company-posts-next" data-id="${companyId}" ${postsPagination.page >= postsPagination.totalPages ? 'disabled' : ''}>Next</button>
-            <button class="btn xs ghost" type="button" data-action="company-posts-last" data-id="${companyId}" ${postsPagination.page >= postsPagination.totalPages ? 'disabled' : ''}>»</button>
+            ${pagerButtons}
           </div>
         ` : '';
 
@@ -3989,10 +4068,21 @@
               <div class="company-posts-box">
                 <div class="company-posts-head">
                   <strong>Post azienda: ${escapeHtml(company.name)}</strong>
-                  <button class="btn xs ghost" type="button" data-action="company-focus-posts" data-id="${company.id}">Apri tab Post</button>
+                  <div class="company-posts-head-actions">
+                    <select class="company-posts-size" data-action="company-posts-pagesize" data-id="${companyId}">
+                      <option value="3" ${companyPostsPageSize === 3 ? 'selected' : ''}>3 / pagina</option>
+                      <option value="5" ${companyPostsPageSize === 5 ? 'selected' : ''}>5 / pagina</option>
+                      <option value="10" ${companyPostsPageSize === 10 ? 'selected' : ''}>10 / pagina</option>
+                      <option value="20" ${companyPostsPageSize === 20 ? 'selected' : ''}>20 / pagina</option>
+                    </select>
+                    ${postsPagerTop}
+                    <button class="btn xs ghost" type="button" data-action="company-focus-posts" data-id="${company.id}">Apri tab Post</button>
+                  </div>
                 </div>
-                <div class="company-posts-list">${postsItems}</div>
-                ${postsPager}
+                <div class="company-posts-scroll">
+                  <div class="company-posts-list">${postsItems}</div>
+                </div>
+                ${postsPagerBottom}
               </div>
             </td>
           </tr>
@@ -4657,6 +4747,31 @@
       );
     }
 
+    function getCompanyPostsPageSize(companyId) {
+      const normalizedId = Number(companyId || 0);
+      if (!normalizedId) return COMPANY_POSTS_PAGE_SIZE_DEFAULT;
+      const value = Number(state.companyPostsPageSizeByCompany?.[normalizedId] || 0);
+      if (Number.isFinite(value) && value > 0) return value;
+      return COMPANY_POSTS_PAGE_SIZE_DEFAULT;
+    }
+
+    function setCompanyPostsPageSize(companyId, nextPageSize) {
+      const normalizedId = Number(companyId || 0);
+      if (!normalizedId) return;
+      const allowed = new Set([3, 5, 10, 20]);
+      const parsed = Number(nextPageSize || 0);
+      const normalizedPageSize = allowed.has(parsed) ? parsed : COMPANY_POSTS_PAGE_SIZE_DEFAULT;
+      state.companyPostsPageSizeByCompany = {
+        ...(state.companyPostsPageSizeByCompany || {}),
+        [normalizedId]: normalizedPageSize
+      };
+      state.companyPostsPage = {
+        ...(state.companyPostsPage || {}),
+        [normalizedId]: 1
+      };
+      renderCompanies();
+    }
+
     function toggleCompanyPosts(companyId) {
       const normalizedId = Number(companyId || 0);
       if (!normalizedId) return;
@@ -4678,7 +4793,7 @@
       const normalizedId = Number(companyId || 0);
       if (!normalizedId) return;
       const posts = getCompanyPosts(normalizedId);
-      const totalPages = paginateRows(posts, nextPage, state.companyPostsPageSize).totalPages;
+      const totalPages = paginateRows(posts, nextPage, getCompanyPostsPageSize(normalizedId)).totalPages;
       const normalizedPage = Math.min(Math.max(1, Number(nextPage || 1)), totalPages);
       state.companyPostsPage = {
         ...(state.companyPostsPage || {}),
@@ -5031,6 +5146,15 @@
       useDraftInPostForm(latest);
     });
 
+    els.companiesTable.addEventListener('change', (event) => {
+      const target = event.target;
+      const action = target?.dataset?.action;
+      const id = Number(target?.dataset?.id || 0);
+      if (action === 'company-posts-pagesize' && id) {
+        setCompanyPostsPageSize(id, Number(target.value || 0));
+      }
+    });
+
     els.companiesTable.addEventListener('click', (event) => {
       const action = event.target?.dataset?.action;
       const id = Number(event.target?.dataset?.id || 0);
@@ -5072,7 +5196,7 @@
         return;
       }
       if (action === 'company-posts-last') {
-        const totalPages = paginateRows(getCompanyPosts(id), Number.MAX_SAFE_INTEGER, state.companyPostsPageSize).totalPages;
+        const totalPages = paginateRows(getCompanyPosts(id), Number.MAX_SAFE_INTEGER, getCompanyPostsPageSize(id)).totalPages;
         setCompanyPostsPage(id, totalPages);
         return;
       }

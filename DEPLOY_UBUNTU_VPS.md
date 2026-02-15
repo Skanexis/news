@@ -176,7 +176,8 @@ journalctl -u yosupport-backend -f
 
 ### 7.1. Basic Auth для админки (рекомендуется)
 
-API проекта не защищен авторизацией, поэтому закройте UI и `/api` basic auth:
+API проекта не защищен авторизацией, поэтому закройте хотя бы `/api` через basic auth.
+UI (`/`) лучше оставить без `auth_basic`, чтобы на телефонах и в Telegram WebView открывалась встроенная форма логина на странице, а не голый `401`.
 
 ```bash
 sudo htpasswd -c /etc/nginx/.htpasswd_yosupport admin
@@ -197,16 +198,14 @@ server {
     root /opt/yosupport/app/frontend;
     index index.html;
 
-    # Админ UI (под Basic Auth)
+    # UI без Basic Auth (чтобы корректно открывался на мобильных/в Telegram)
     location / {
-        auth_basic "Restricted";
-        auth_basic_user_file /etc/nginx/.htpasswd_yosupport;
         try_files $uri $uri/ /index.html;
     }
 
     # API для frontend: /api/* -> backend /*
     location /api/ {
-        auth_basic "Restricted";
+        auth_basic "Restricted API";
         auth_basic_user_file /etc/nginx/.htpasswd_yosupport;
 
         proxy_pass http://127.0.0.1:3000/;
@@ -367,3 +366,7 @@ sudo systemctl status yosupport-backend
 
 4. Не приходят webhook-обновления.  
 Проверьте `TELEGRAM_WEBHOOK_SECRET`, путь `/telegram/webhook`, HTTPS и ответ Telegram API после `setWebhook`.
+
+5. На телефоне/в Telegram сразу `401 Unauthorized` без окна логина.  
+Так происходит из-за `auth_basic` на `location /` (встроенный браузер Telegram часто не показывает basic auth диалог).  
+Решение: уберите `auth_basic` с `/`, оставьте его только на `/api/`, затем `sudo nginx -t && sudo systemctl reload nginx`.

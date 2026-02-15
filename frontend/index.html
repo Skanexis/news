@@ -1826,7 +1826,7 @@
         <div class="panel span-8 allow-overflow" id="companiesPanel">
           <div class="panel-head">
             <h3>Aziende</h3>
-            <p>Destinazioni Telegram con orario preferito opzionale.</p>
+            <p>Gestione aziende con orario preferito opzionale. Il canale Telegram viene letto da TELEGRAM_CHANNEL_ID.</p>
           </div>
           <div class="form-grid">
             <label class="field span-6">
@@ -1840,14 +1840,6 @@
                 <button class="time-trigger" type="button" aria-label="Apri selettore orario"></button>
               </div>
             </label>
-            <label class="field span-6">
-              <span>ID canale Telegram</span>
-              <input type="text" id="companyTelegramId" placeholder="-100123456789">
-            </label>
-            <label class="field span-6">
-              <span>URL pubblica Telegram</span>
-              <input type="url" id="companyTelegramUrl" placeholder="https://t.me/brand">
-            </label>
           </div>
           <div class="row">
             <button class="btn primary" id="saveCompanyBtn">Salva Azienda</button>
@@ -1859,7 +1851,6 @@
                 <tr>
                   <th>ID</th>
                   <th>Nome</th>
-                  <th>Telegram</th>
                   <th>Preferito</th>
                   <th>Post</th>
                   <th>Azioni</th>
@@ -1945,6 +1936,14 @@
               <span>Testo (opzionale se bozza collegata)</span>
               <textarea id="postText" rows="4" placeholder="Testo del post Telegram"></textarea>
             </label>
+            <div class="field span-12">
+              <div class="row">
+                <span>Pulsanti link (max 8)</span>
+                <button class="btn xs ghost" id="addPostButtonBtn" type="button">Aggiungi pulsante</button>
+              </div>
+              <div id="postButtonsList" class="post-buttons-list"></div>
+              <p class="hint">Ogni pulsante richiede testo e URL completo (http/https). Se lasci vuoto, il post viene inviato senza pulsanti.</p>
+            </div>
           </div>
           <div class="row">
             <button class="btn primary" id="savePostBtn">Salva Post</button>
@@ -2085,6 +2084,8 @@
     const POST_DRAFT_STORAGE_KEY = 'yosupport_post_form_draft_v1';
     const POST_DRAFT_STORAGE_VERSION = 1;
     const POST_DRAFT_DEBOUNCE_MS = 250;
+    const MAX_POST_BUTTONS = 8;
+    const MAX_POST_BUTTON_TEXT_LENGTH = 64;
     const API_AUTH_STORAGE_KEY = 'yosupport_api_basic_auth_v1';
     let postDraftRestoreDone = false;
     let savingPost = false;
@@ -2117,8 +2118,6 @@
       schedulerForecast: byId('schedulerForecast'),
       companyName: byId('companyName'),
       companyPreferredTime: byId('companyPreferredTime'),
-      companyTelegramId: byId('companyTelegramId'),
-      companyTelegramUrl: byId('companyTelegramUrl'),
       saveCompanyBtn: byId('saveCompanyBtn'),
       clearCompanyBtn: byId('clearCompanyBtn'),
       companiesTable: byId('companiesTable'),
@@ -2140,6 +2139,8 @@
       postDraft: byId('postDraft'),
       postChecklist: byId('postChecklist'),
       postText: byId('postText'),
+      addPostButtonBtn: byId('addPostButtonBtn'),
+      postButtonsList: byId('postButtonsList'),
       savePostBtn: byId('savePostBtn'),
       clearPostBtn: byId('clearPostBtn'),
       postsTable: byId('postsTable'),
@@ -2318,6 +2319,112 @@
       return formatIsoDate(next);
     }
 
+    function normalizePostButtonRows(value) {
+      if (!Array.isArray(value)) return [];
+      return value
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null;
+          const text = String(item.text || '').trim().slice(0, MAX_POST_BUTTON_TEXT_LENGTH);
+          const url = String(item.url || '').trim();
+          if (!text || !url) return null;
+          return { text, url };
+        })
+        .filter(Boolean)
+        .slice(0, MAX_POST_BUTTONS);
+    }
+
+    function parsePostButtons(value) {
+      if (Array.isArray(value)) return normalizePostButtonRows(value);
+      if (!value) return [];
+      if (typeof value !== 'string') return [];
+      try {
+        return normalizePostButtonRows(JSON.parse(value));
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function isValidHttpUrl(value) {
+      try {
+        const url = new URL(String(value || ''));
+        return url.protocol === 'http:' || url.protocol === 'https:';
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function getPostButtonRows() {
+      if (!els.postButtonsList) return [];
+      return Array.from(els.postButtonsList.querySelectorAll('.post-button-row'));
+    }
+
+    function createPostButtonRow(button = {}) {
+      const row = document.createElement('div');
+      row.className = 'post-button-row';
+      row.innerHTML = `
+        <input type="text" class="post-button-text" placeholder="Testo pulsante" maxlength="${MAX_POST_BUTTON_TEXT_LENGTH}">
+        <input type="url" class="post-button-url" placeholder="https://example.com">
+        <button class="btn xs ghost" type="button" data-action="post-button-remove">Rimuovi</button>
+      `;
+      const textInput = row.querySelector('.post-button-text');
+      const urlInput = row.querySelector('.post-button-url');
+      if (textInput) textInput.value = String(button.text || '').trim().slice(0, MAX_POST_BUTTON_TEXT_LENGTH);
+      if (urlInput) urlInput.value = String(button.url || '').trim();
+      return row;
+    }
+
+    function syncPostButtonsControlState() {
+      if (!els.addPostButtonBtn) return;
+      els.addPostButtonBtn.disabled = getPostButtonRows().length >= MAX_POST_BUTTONS;
+    }
+
+    function setPostButtons(buttons) {
+      if (!els.postButtonsList) return;
+      const normalized = normalizePostButtonRows(buttons);
+      els.postButtonsList.innerHTML = '';
+      const source = normalized.length ? normalized : [{}];
+      source.forEach((button) => {
+        els.postButtonsList.appendChild(createPostButtonRow(button));
+      });
+      syncPostButtonsControlState();
+    }
+
+    function addPostButtonRow(button = {}) {
+      if (!els.postButtonsList) return;
+      const rows = getPostButtonRows();
+      if (rows.length >= MAX_POST_BUTTONS) return;
+      els.postButtonsList.appendChild(createPostButtonRow(button));
+      syncPostButtonsControlState();
+    }
+
+    function collectPostButtonDraftRows() {
+      return getPostButtonRows().map((row) => ({
+        text: String(row.querySelector('.post-button-text')?.value || '').trim().slice(0, MAX_POST_BUTTON_TEXT_LENGTH),
+        url: String(row.querySelector('.post-button-url')?.value || '').trim()
+      })).filter((button) => button.text || button.url);
+    }
+
+    function validatePostButtons() {
+      const rows = collectPostButtonDraftRows();
+      if (rows.length > MAX_POST_BUTTONS) {
+        return { ok: false, buttons: [], error: `Massimo ${MAX_POST_BUTTONS} pulsanti per post.` };
+      }
+      const buttons = [];
+      for (const button of rows) {
+        if (!button.text || !button.url) {
+          return { ok: false, buttons: [], error: 'Ogni pulsante richiede testo e URL.' };
+        }
+        if (!isValidHttpUrl(button.url)) {
+          return { ok: false, buttons: [], error: 'Ogni URL pulsante deve iniziare con http:// o https://.' };
+        }
+        buttons.push({
+          text: button.text,
+          url: button.url
+        });
+      }
+      return { ok: true, buttons };
+    }
+
     function collectPostFormSnapshot() {
       return {
         companyId: Number(els.postCompany.value || 0) || null,
@@ -2325,7 +2432,8 @@
         endDate: els.postEndDate.value.trim(),
         active: els.postActive.checked ? 1 : 0,
         draftId: els.postDraft.value ? Number(els.postDraft.value) : null,
-        text: els.postText.value.trim()
+        text: els.postText.value.trim(),
+        buttons: collectPostButtonDraftRows()
       };
     }
 
@@ -2334,6 +2442,7 @@
       if (snapshot.companyId) return true;
       if (snapshot.startDate || snapshot.endDate) return true;
       if (snapshot.draftId || snapshot.text) return true;
+      if (Array.isArray(snapshot.buttons) && snapshot.buttons.length) return true;
       return false;
     }
 
@@ -2379,6 +2488,7 @@
         els.postActive.checked = Number(snapshot.active) !== 0;
         els.postDraft.value = snapshot.draftId ? String(snapshot.draftId) : '';
         els.postText.value = snapshot.text || '';
+        setPostButtons(snapshot.buttons);
         refreshCustomSelect(els.postCompany);
         renderDrafts();
         updatePostChecklist();
@@ -2407,11 +2517,13 @@
       const companyId = Number(els.postCompany.value || 0);
       const startDate = els.postStartDate.value.trim();
       const endDate = els.postEndDate.value.trim();
+      const buttonsCheck = validatePostButtons();
       const hasCompany = companyId > 0;
       const hasDates = isValidDateString(startDate) && isValidDateString(endDate) && startDate <= endDate;
       const hasContent = Boolean(els.postText.value.trim()) || Boolean(els.postDraft.value);
-      const ready = hasCompany && hasDates && hasContent;
-      return { hasCompany, hasDates, hasContent, ready };
+      const hasButtons = buttonsCheck.ok;
+      const ready = hasCompany && hasDates && hasContent && hasButtons;
+      return { hasCompany, hasDates, hasContent, hasButtons, buttonsError: buttonsCheck.error, buttons: buttonsCheck.buttons, ready };
     }
 
     function updatePostChecklist() {
@@ -2419,7 +2531,8 @@
       const rows = [
         { ok: checks.hasCompany, text: 'Azienda selezionata' },
         { ok: checks.hasDates, text: 'Date compilate correttamente' },
-        { ok: checks.hasContent, text: 'Presente testo o bozza selezionata' }
+        { ok: checks.hasContent, text: 'Presente testo o bozza selezionata' },
+        { ok: checks.hasButtons, text: `Pulsanti validi (${MAX_POST_BUTTONS} max)` }
       ];
       if (els.postChecklist) {
         els.postChecklist.innerHTML = rows.map((row) => (
@@ -3262,7 +3375,6 @@
           <tr>
             <td>#${company.id}</td>
             <td>${escapeHtml(company.name)}</td>
-            <td>${escapeHtml(company.telegramChannelId || '-')}</td>
             <td>${escapeHtml(company.preferredTime || '-')}</td>
             <td>${company.postCount || 0}</td>
             <td>
@@ -3273,7 +3385,7 @@
             </td>
           </tr>
         `;
-      }).join('') || '<tr><td colspan="6" class="muted">Nessuna azienda presente.</td></tr>';
+      }).join('') || '<tr><td colspan="5" class="muted">Nessuna azienda presente.</td></tr>';
 
       els.postCompany.innerHTML = '<option value="">Seleziona azienda</option>' + state.companies.map((company) => (
         `<option value="${company.id}">${escapeHtml(company.name)}</option>`
@@ -3522,8 +3634,6 @@
       state.companyEditId = null;
       els.companyName.value = '';
       els.companyPreferredTime.value = '';
-      els.companyTelegramId.value = '';
-      els.companyTelegramUrl.value = '';
     }
 
     function clearPostForm() {
@@ -3534,6 +3644,7 @@
       els.postDraft.value = '';
       els.postActive.checked = true;
       els.postText.value = '';
+      setPostButtons([]);
       refreshCustomSelect(els.postCompany);
       renderDrafts();
       updatePostChecklist();
@@ -3548,6 +3659,7 @@
       els.postDraft.value = post.draftId ? String(post.draftId) : '';
       els.postActive.checked = Number(post.active) === 1;
       els.postText.value = post.text || '';
+      setPostButtons(parsePostButtons(post.buttons));
       refreshCustomSelect(els.postCompany);
       renderDrafts();
       updatePostChecklist();
@@ -3563,6 +3675,7 @@
       els.postDraft.value = post.draftId ? String(post.draftId) : '';
       els.postActive.checked = Number(post.active) === 1;
       els.postText.value = post.text || '';
+      setPostButtons(parsePostButtons(post.buttons));
       refreshCustomSelect(els.postCompany);
       renderDrafts();
       updatePostChecklist();
@@ -3592,9 +3705,7 @@
       if (savingCompany) return;
       const payload = {
         name: els.companyName.value.trim(),
-        preferredTime: els.companyPreferredTime.value || null,
-        telegramChannelId: els.companyTelegramId.value.trim(),
-        telegramPublicUrl: els.companyTelegramUrl.value.trim()
+        preferredTime: els.companyPreferredTime.value || null
       };
       if (!payload.name) {
         setStatus('Il nome azienda è obbligatorio.', 'error');
@@ -3648,6 +3759,11 @@
         setStatus('Aggiungi un testo o collega una bozza.', 'error');
         return;
       }
+      if (!checks.hasButtons) {
+        setStatus(checks.buttonsError || 'Configura correttamente i pulsanti del post.', 'error');
+        return;
+      }
+      payload.buttons = checks.buttons;
       savingPost = true;
       els.savePostBtn.disabled = true;
       try {
@@ -3809,6 +3925,15 @@
       clearPostForm();
       focusPanel(els.postComposerPanel, els.postStartDate);
     });
+    els.addPostButtonBtn.addEventListener('click', () => {
+      if (getPostButtonRows().length >= MAX_POST_BUTTONS) {
+        setStatus(`Massimo ${MAX_POST_BUTTONS} pulsanti per post.`, 'error');
+        return;
+      }
+      addPostButtonRow();
+      updatePostChecklist();
+      schedulePostDraftSave();
+    });
     els.postsCompanyFilter.addEventListener('change', () => {
       setPostsCompanyFilter(Number(els.postsCompanyFilter.value || 0));
     });
@@ -3861,6 +3986,27 @@
       el.addEventListener('change', onFormChange);
       el.addEventListener('input', onFormChange);
     });
+    if (els.postButtonsList) {
+      const onButtonsChange = () => {
+        updatePostChecklist();
+        schedulePostDraftSave();
+      };
+      els.postButtonsList.addEventListener('change', onButtonsChange);
+      els.postButtonsList.addEventListener('input', onButtonsChange);
+      els.postButtonsList.addEventListener('click', (event) => {
+        const target = event.target.closest('[data-action="post-button-remove"]');
+        if (!target) return;
+        const row = target.closest('.post-button-row');
+        if (!row) return;
+        row.remove();
+        if (!getPostButtonRows().length) {
+          addPostButtonRow();
+        }
+        syncPostButtonsControlState();
+        updatePostChecklist();
+        schedulePostDraftSave();
+      });
+    }
 
     els.postStartDate.addEventListener('change', () => {
       maybeAutoAdjustPostEndDate();
@@ -3908,8 +4054,6 @@
         state.companyEditId = company.id;
         els.companyName.value = company.name || '';
         els.companyPreferredTime.value = company.preferredTime || '';
-        els.companyTelegramId.value = company.telegramChannelId || '';
-        els.companyTelegramUrl.value = company.telegramPublicUrl || '';
         setStatus(`Modifica azienda #${company.id}`, 'success');
         focusPanel(els.companiesPanel, els.companyName);
       }
@@ -3959,6 +4103,7 @@
     document.querySelectorAll('.time-input').forEach(buildTimePicker);
     syncAuthButton();
     els.scheduleDate.value = state.scheduleDate;
+    setPostButtons([]);
     updatePostChecklist();
     refreshCustomSelect(els.postCompany);
     refreshCustomSelect(els.postsCompanyFilter);

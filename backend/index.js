@@ -33,6 +33,8 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 const allowedPlatforms = new Set(['telegram']);
+const MAX_POST_BUTTONS = 8;
+const MAX_POST_BUTTON_TEXT_LENGTH = 64;
 
 function badRequest(res, message) {
  return res.status(400).send({ ok: false, error: message });
@@ -85,8 +87,81 @@ function normalizeUrl(value) {
  return trimmed ? trimmed : null;
 }
 
+function isHttpUrl(value) {
+ if (!value) return false;
+ try {
+  const url = new URL(value);
+  return url.protocol === 'http:' || url.protocol === 'https:';
+ } catch (e) {
+  return false;
+ }
+}
+
+function parseStoredButtons(value) {
+ if (value === undefined || value === null) return [];
+ let parsed = value;
+ if (typeof value === 'string') {
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  try {
+   parsed = JSON.parse(trimmed);
+  } catch (e) {
+   return [];
+  }
+ }
+ if (!Array.isArray(parsed)) return [];
+ return parsed
+  .map((item) => {
+   if (!item || typeof item !== 'object') return null;
+   const text = normalizeText(item.text);
+   const url = normalizeUrl(item.url);
+   if (!text || !url || !isHttpUrl(url)) return null;
+   return {
+    text: text.slice(0, MAX_POST_BUTTON_TEXT_LENGTH),
+    url
+   };
+  })
+  .filter(Boolean)
+  .slice(0, MAX_POST_BUTTONS);
+}
+
+function normalizePostButtonsInput(value) {
+ if (value === undefined || value === null || value === '') return [];
+ let parsed = value;
+ if (typeof parsed === 'string') {
+  try {
+   parsed = JSON.parse(parsed);
+  } catch (e) {
+   throw new Error('Buttons payload is invalid');
+  }
+ }
+ if (!Array.isArray(parsed)) {
+  throw new Error('Buttons must be an array');
+ }
+ if (parsed.length > MAX_POST_BUTTONS) {
+  throw new Error(`Maximum ${MAX_POST_BUTTONS} buttons allowed`);
+ }
+ return parsed.map((item, index) => {
+  if (!item || typeof item !== 'object') {
+   throw new Error(`Button #${index + 1} is invalid`);
+  }
+  const text = normalizeText(item.text);
+  const url = normalizeUrl(item.url);
+  if (!text || !url) {
+   throw new Error(`Button #${index + 1} requires text and url`);
+  }
+  if (!isHttpUrl(url)) {
+   throw new Error(`Button #${index + 1} has invalid url`);
+  }
+  return {
+   text: text.slice(0, MAX_POST_BUTTON_TEXT_LENGTH),
+   url
+  };
+ });
+}
+
 function getCtaUrl(post) {
- return normalizeUrl(post.ctaUrl) || normalizeUrl(post.telegramPublicUrl) || null;
+ return normalizeUrl(post.ctaUrl) || null;
 }
 
 function formatCtaLabel(ctaUrl, ctaLabel) {
@@ -112,6 +187,22 @@ function buildTrackedUrl(code) {
 
 function resolveCtaUrl(post) {
  return buildTrackedUrl(post.linkCode) || getCtaUrl(post);
+}
+
+function buildTelegramReplyMarkup(post) {
+ const buttons = parseStoredButtons(post.buttons);
+ if (buttons.length) {
+  return {
+   inline_keyboard: buttons.map((button) => ([{
+    text: button.text,
+    url: button.url
+   }]))
+  };
+ }
+ const ctaUrl = resolveCtaUrl(post);
+ if (!ctaUrl) return null;
+ const ctaLabel = formatCtaLabel(ctaUrl, post.ctaLabel);
+ return { inline_keyboard: [[{ text: ctaLabel, url: ctaUrl }]] };
 }
 
 function generateCode(length = 7) {
@@ -333,11 +424,9 @@ async function pullTelegramUpdates() {
 }
 
 async function sendTelegramPost(post) {
- const chatId = post.telegramChannelId || process.env.TELEGRAM_CHANNEL_ID;
- if (!chatId) throw new Error('Company Telegram channel ID is required');
- const ctaUrl = resolveCtaUrl(post);
- const ctaLabel = formatCtaLabel(ctaUrl, post.ctaLabel);
- const replyMarkup = ctaUrl ? { inline_keyboard: [[{ text: ctaLabel, url: ctaUrl }]] } : null;
+ const chatId = normalizeText(process.env.TELEGRAM_CHANNEL_ID);
+ if (!chatId) throw new Error('TELEGRAM_CHANNEL_ID is required');
+ const replyMarkup = buildTelegramReplyMarkup(post);
 
  if (post.draftId) {
   const draft = db.prepare('SELECT * FROM drafts WHERE id = ?').get(post.draftId);
@@ -369,8 +458,6 @@ function getActiveTelegramPostsForDate(targetDate) {
  return db.prepare(`
   SELECT posts.*,
     companies.name as companyName,
-    companies.telegramChannelId,
-    companies.telegramPublicUrl,
     companies.preferredTime,
     links.code as linkCode
    FROM posts
@@ -510,42 +597,40 @@ async function processDueSchedule(force = false) {
   }
 
   const nowIso = nowLocalIso();
-    const item = db.prepare(`
-     SELECT
-      schedule_items.id as scheduleId,
-      schedule_items.postId as schedulePostId,
-      schedule_items.scheduledAt,
-      schedule_items.status,
-      schedule_items.error,
-      schedule_items.createdAt,
-      schedule_items.sentAt,
-      posts.*,
-      companies.name as companyName,
-      companies.telegramChannelId,
-      companies.telegramPublicUrl,
-      links.code as linkCode
-     FROM schedule_items
-     JOIN posts ON schedule_items.postId = posts.id
-     JOIN companies ON posts.companyId = companies.id
-     LEFT JOIN links ON posts.linkId = links.id
-     WHERE schedule_items.status='pending' AND schedule_items.scheduledAt <= ? AND posts.platform = 'telegram'
-     ORDER BY schedule_items.scheduledAt ASC
-     LIMIT 1
-    `).get(nowIso);
+  const item = db.prepare(`
+    SELECT
+     schedule_items.id as scheduleId,
+     schedule_items.postId as schedulePostId,
+     schedule_items.scheduledAt,
+     schedule_items.status,
+     schedule_items.error,
+     schedule_items.createdAt,
+     schedule_items.sentAt,
+     posts.*,
+     companies.name as companyName,
+     links.code as linkCode
+    FROM schedule_items
+    JOIN posts ON schedule_items.postId = posts.id
+    JOIN companies ON posts.companyId = companies.id
+    LEFT JOIN links ON posts.linkId = links.id
+    WHERE schedule_items.status='pending' AND schedule_items.scheduledAt <= ? AND posts.platform = 'telegram'
+    ORDER BY schedule_items.scheduledAt ASC
+    LIMIT 1
+   `).get(nowIso);
 
   if (!item) return;
 
   const sentAt = new Date().toISOString();
   try {
-     if (item.platform === 'telegram') await sendTelegramPost(item);
-     db.prepare('UPDATE schedule_items SET status=?, sentAt=? WHERE id=?')
-      .run('sent', sentAt, item.scheduleId);
-     insertLog(item, 'sent', null, 'auto');
-    } catch (e) {
-     db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=? WHERE id=?')
-      .run('failed', sentAt, e.message, item.scheduleId);
-     insertLog(item, 'failed', e.message, 'auto');
-    }
+   if (item.platform === 'telegram') await sendTelegramPost(item);
+   db.prepare('UPDATE schedule_items SET status=?, sentAt=? WHERE id=?')
+    .run('sent', sentAt, item.scheduleId);
+   insertLog(item, 'sent', null, 'auto');
+  } catch (e) {
+   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=? WHERE id=?')
+    .run('failed', sentAt, e.message, item.scheduleId);
+   insertLog(item, 'failed', e.message, 'auto');
+  }
   setSetting('lastSentAt', sentAt);
  } finally {
   scheduleProcessing = false;
@@ -593,8 +678,6 @@ async function publishPostNow(postId) {
  const post = db.prepare(`
  SELECT posts.*, 
    companies.name as companyName,
-   companies.telegramChannelId,
-   companies.telegramPublicUrl,
    links.code as linkCode
   FROM posts
   JOIN companies ON posts.companyId = companies.id
@@ -635,7 +718,8 @@ db.prepare(`CREATE TABLE IF NOT EXISTS posts (
  ctaUrl TEXT,
  ctaLabel TEXT,
  trackLinks INTEGER DEFAULT 1,
- linkId INTEGER
+ linkId INTEGER,
+ buttons TEXT
 )`).run();
 
 db.prepare(`CREATE TABLE IF NOT EXISTS links (
@@ -708,6 +792,7 @@ ensureColumn('posts', 'ctaUrl', 'TEXT');
 ensureColumn('posts', 'ctaLabel', 'TEXT');
 ensureColumn('posts', 'trackLinks', 'INTEGER');
 ensureColumn('posts', 'linkId', 'INTEGER');
+ensureColumn('posts', 'buttons', 'TEXT');
 ensureColumn('logs', 'createdAt', 'TEXT');
 ensureColumn('logs', 'trigger', 'TEXT');
 
@@ -805,8 +890,6 @@ app.get('/companies', (_, res) => res.send(db.prepare(`
  SELECT
   companies.id,
   companies.name,
-  companies.telegramChannelId,
-  companies.telegramPublicUrl,
   companies.preferredTime,
   (SELECT COUNT(*) FROM posts WHERE posts.companyId = companies.id AND posts.platform = 'telegram') as postCount
  FROM companies
@@ -816,14 +899,12 @@ app.get('/companies', (_, res) => res.send(db.prepare(`
 app.post('/companies', (req, res) => {
  const name = normalizeText(req.body.name);
  if (!name) return badRequest(res, 'Company name is required');
- const telegramChannelId = normalizeText(req.body.telegramChannelId);
- const telegramPublicUrl = normalizeUrl(req.body.telegramPublicUrl);
  const preferredTime = normalizeTime(req.body.preferredTime);
  if (req.body.preferredTime && !preferredTime) return badRequest(res, 'Invalid preferred time');
 
- db.prepare(`INSERT INTO companies (name, telegramChannelId, telegramPublicUrl, preferredTime)
-  VALUES (?,?,?,?)
- `).run(name, telegramChannelId, telegramPublicUrl, preferredTime);
+ db.prepare(`INSERT INTO companies (name, preferredTime)
+  VALUES (?,?)
+ `).run(name, preferredTime);
  res.send({ ok: true });
 });
 
@@ -832,15 +913,13 @@ app.put('/companies/:id', (req, res) => {
  if (!id) return badRequest(res, 'Invalid company id');
  const name = normalizeText(req.body.name);
  if (!name) return badRequest(res, 'Company name is required');
- const telegramChannelId = normalizeText(req.body.telegramChannelId);
- const telegramPublicUrl = normalizeUrl(req.body.telegramPublicUrl);
  const preferredTime = normalizeTime(req.body.preferredTime);
  if (req.body.preferredTime && !preferredTime) return badRequest(res, 'Invalid preferred time');
 
  db.prepare(`UPDATE companies SET
-  name=?, telegramChannelId=?, telegramPublicUrl=?, preferredTime=?
+  name=?, preferredTime=?
   WHERE id=?
- `).run(name, telegramChannelId, telegramPublicUrl, preferredTime, id);
+ `).run(name, preferredTime, id);
  res.send({ ok: true });
 });
 
@@ -868,9 +947,8 @@ app.get('/posts', (_, res) => {
    posts.ctaLabel,
    posts.trackLinks,
    posts.linkId,
+   posts.buttons,
    companies.name as companyName,
-   companies.telegramChannelId,
-   companies.telegramPublicUrl,
    drafts.mediaType as draftMediaType,
    drafts.text as draftText,
    drafts.caption as draftCaption,
@@ -887,13 +965,14 @@ app.get('/posts', (_, res) => {
  `).all();
  const enriched = rows.map((row) => ({
   ...row,
+  buttons: parseStoredButtons(row.buttons),
   trackedUrl: buildTrackedUrl(row.linkCode)
  }));
  res.send(enriched);
 });
 
 app.post('/posts', (req, res) => {
- const { companyId, text, startDate, endDate, active, draftId, ctaUrl, ctaLabel, trackLinks } = req.body;
+ const { companyId, text, startDate, endDate, active, draftId, ctaUrl, ctaLabel, trackLinks, buttons } = req.body;
  const normalizedCompanyId = Number(companyId);
  if (!normalizedCompanyId) return badRequest(res, 'Company is required');
  const platform = 'telegram';
@@ -914,9 +993,16 @@ app.post('/posts', (req, res) => {
  const normalizedCtaUrl = normalizeUrl(ctaUrl);
  let trackLinksValue = trackLinks === 0 || trackLinks === false || trackLinks === '0' ? 0 : 1;
  if (!normalizedCtaUrl) trackLinksValue = 0;
+ let normalizedButtons;
+ try {
+  normalizedButtons = normalizePostButtonsInput(buttons);
+ } catch (e) {
+  return badRequest(res, e.message);
+ }
+ const serializedButtons = normalizedButtons.length ? JSON.stringify(normalizedButtons) : null;
 
- const insert = db.prepare(`INSERT INTO posts (companyId,text,platform,startDate,endDate,active,draftId,ctaUrl,ctaLabel,trackLinks,linkId)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?)
+ const insert = db.prepare(`INSERT INTO posts (companyId,text,platform,startDate,endDate,active,draftId,ctaUrl,ctaLabel,trackLinks,linkId,buttons)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
  `).run(
   normalizedCompanyId,
   bodyText,
@@ -928,7 +1014,8 @@ app.post('/posts', (req, res) => {
   normalizedCtaUrl,
   normalizeText(ctaLabel),
   trackLinksValue,
-  null
+  null,
+  serializedButtons
  );
 
  const postId = insert.lastInsertRowid;
@@ -946,7 +1033,7 @@ app.post('/posts', (req, res) => {
 app.put('/posts/:id', (req, res) => {
  const id = Number(req.params.id);
  if (!id) return badRequest(res, 'Invalid post id');
- const { companyId, text, startDate, endDate, active, draftId, ctaUrl, ctaLabel, trackLinks } = req.body;
+ const { companyId, text, startDate, endDate, active, draftId, ctaUrl, ctaLabel, trackLinks, buttons } = req.body;
  const normalizedCompanyId = Number(companyId);
  if (!normalizedCompanyId) return badRequest(res, 'Company is required');
  const platform = 'telegram';
@@ -965,7 +1052,8 @@ app.put('/posts/:id', (req, res) => {
  }
  const activeValue = active === 0 ? 0 : 1;
  const normalizedCtaUrl = normalizeUrl(ctaUrl);
- const existing = db.prepare('SELECT linkId, trackLinks FROM posts WHERE id = ?').get(id);
+ const existing = db.prepare('SELECT linkId, trackLinks, buttons FROM posts WHERE id = ?').get(id);
+ if (!existing) return res.status(404).send({ ok: false, error: 'Post not found' });
  let trackLinksValue;
  if (trackLinks === undefined || trackLinks === null) {
   trackLinksValue = existing?.trackLinks ?? 1;
@@ -978,8 +1066,19 @@ app.put('/posts/:id', (req, res) => {
  if (trackLinksValue && normalizedCtaUrl) {
   linkId = ensurePostLink(id, normalizedCtaUrl, existing?.linkId, true);
  }
+ let normalizedButtons;
+ if (buttons === undefined) {
+  normalizedButtons = parseStoredButtons(existing.buttons);
+ } else {
+  try {
+   normalizedButtons = normalizePostButtonsInput(buttons);
+  } catch (e) {
+   return badRequest(res, e.message);
+  }
+ }
+ const serializedButtons = normalizedButtons.length ? JSON.stringify(normalizedButtons) : null;
 
- db.prepare(`UPDATE posts SET companyId=?, text=?, platform=?, startDate=?, endDate=?, active=?, draftId=?, ctaUrl=?, ctaLabel=?, trackLinks=?, linkId=? WHERE id=?`)
+ db.prepare(`UPDATE posts SET companyId=?, text=?, platform=?, startDate=?, endDate=?, active=?, draftId=?, ctaUrl=?, ctaLabel=?, trackLinks=?, linkId=?, buttons=? WHERE id=?`)
   .run(
    normalizedCompanyId,
    bodyText,
@@ -992,6 +1091,7 @@ app.put('/posts/:id', (req, res) => {
    normalizeText(ctaLabel),
    trackLinksValue,
    linkId,
+   serializedButtons,
    id
   );
  res.send({ ok: true });
@@ -1097,6 +1197,7 @@ app.get('/schedule/items', (req, res) => {
    posts.text as postText,
    posts.ctaLabel as ctaLabel,
    posts.ctaUrl as ctaUrl,
+   posts.buttons as buttons,
    posts.draftId as draftId,
    drafts.mediaType as draftMediaType,
    companies.name as companyName

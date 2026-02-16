@@ -10,22 +10,22 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #070a16;
-      --bg-2: #0b1022;
-      --panel: rgba(16, 22, 42, 0.92);
-      --panel-soft: rgba(15, 20, 38, 0.78);
-      --stroke: rgba(122, 134, 179, 0.25);
-      --text: #e6ebff;
-      --muted: #8a93b5;
-      --accent: #4f6fdc;
-      --accent-2: #2aa3c7;
-      --accent-3: #d06c84;
-      --success: #2ee6a6;
-      --warning: #ffb347;
-      --danger: #ff5d7f;
-      --shadow: 0 28px 70px rgba(2, 6, 20, 0.65);
-      --glow: 0 0 24px rgba(79, 111, 220, 0.2);
-      --radius-lg: 20px;
+      --bg: #0b1220;
+      --bg-2: #101a2d;
+      --panel: rgba(15, 22, 38, 0.95);
+      --panel-soft: rgba(18, 24, 40, 0.82);
+      --stroke: rgba(122, 134, 179, 0.22);
+      --text: #e6edf9;
+      --muted: #99a8c8;
+      --accent: #3f7dcf;
+      --accent-2: #4f9eb8;
+      --accent-3: #c27b8e;
+      --success: #35d59f;
+      --warning: #f2b35a;
+      --danger: #f06f8f;
+      --shadow: 0 14px 34px rgba(5, 10, 24, 0.38);
+      --glow: 0 0 0 rgba(0, 0, 0, 0);
+      --radius-lg: 18px;
       --radius-md: 14px;
       --radius-sm: 10px;
     }
@@ -38,13 +38,12 @@
       margin: 0;
       font-family: 'Space Grotesk', sans-serif;
       color: var(--text);
-      background: radial-gradient(circle at 15% 20%, rgba(79, 111, 220, 0.12), transparent 55%),
-                  radial-gradient(circle at 85% 10%, rgba(42, 163, 199, 0.12), transparent 55%),
-                  radial-gradient(circle at 70% 80%, rgba(208, 108, 132, 0.1), transparent 55%),
-                  linear-gradient(160deg, #060812 0%, #0c1226 60%, #080c18 100%);
+      background: radial-gradient(circle at 12% 16%, rgba(63, 125, 207, 0.1), transparent 58%),
+                  radial-gradient(circle at 86% 12%, rgba(79, 158, 184, 0.09), transparent 58%),
+                  linear-gradient(155deg, #0a1220 0%, #0f1b31 60%, #0b1425 100%);
       min-height: 100vh;
       overflow-x: hidden;
-      scrollbar-color: rgba(79, 111, 220, 0.5) rgba(12, 18, 36, 0.9);
+      scrollbar-color: rgba(63, 125, 207, 0.45) rgba(12, 18, 36, 0.9);
       scrollbar-width: thin;
     }
 
@@ -80,32 +79,32 @@
       position: fixed;
       z-index: -2;
       border-radius: 999px;
-      filter: blur(40px);
-      opacity: 0.5;
+      filter: blur(56px);
+      opacity: 0.24;
     }
 
     .orb-a {
-      width: 420px;
-      height: 420px;
-      top: -180px;
+      width: 360px;
+      height: 360px;
+      top: -150px;
       left: -120px;
-      background: radial-gradient(circle, rgba(79, 111, 220, 0.65), rgba(79, 111, 220, 0));
+      background: radial-gradient(circle, rgba(63, 125, 207, 0.55), rgba(63, 125, 207, 0));
     }
 
     .orb-b {
-      width: 380px;
-      height: 380px;
+      width: 320px;
+      height: 320px;
       top: 10%;
       right: -160px;
-      background: radial-gradient(circle, rgba(42, 163, 199, 0.6), rgba(42, 163, 199, 0));
+      background: radial-gradient(circle, rgba(79, 158, 184, 0.55), rgba(79, 158, 184, 0));
     }
 
     .orb-c {
-      width: 300px;
-      height: 300px;
+      width: 260px;
+      height: 260px;
       bottom: -120px;
       right: 15%;
-      background: radial-gradient(circle, rgba(208, 108, 132, 0.45), rgba(208, 108, 132, 0));
+      background: radial-gradient(circle, rgba(194, 123, 142, 0.38), rgba(194, 123, 142, 0));
     }
 
     .grid-glow {
@@ -113,18 +112,18 @@
       inset: 0;
       background-image: linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
                         linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
-      background-size: 80px 80px;
-      opacity: 0.15;
+      background-size: 120px 120px;
+      opacity: 0.07;
       pointer-events: none;
       z-index: -3;
     }
 
     .app-shell {
       width: min(1240px, 94vw);
-      margin: 30px auto 50px;
+      margin: 24px auto 44px;
       display: flex;
       flex-direction: column;
-      gap: 24px;
+      gap: 20px;
     }
 
     .topbar {
@@ -306,11 +305,11 @@
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 14px;
+      gap: 12px;
     }
 
     .stat-card {
-      padding: 18px;
+      padding: 16px;
       border-radius: var(--radius-md);
       background: var(--panel);
       border: 1px solid var(--stroke);
@@ -320,7 +319,7 @@
       gap: 8px;
       position: relative;
       overflow: hidden;
-      animation: rise-in 0.7s ease both;
+      animation: rise-in 0.55s ease both;
     }
 
     .stat-card span {
@@ -345,9 +344,8 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      font-size: 18px;
-      text-transform: uppercase;
-      letter-spacing: 0.14em;
+      font-size: 16px;
+      letter-spacing: 0.06em;
       color: var(--muted);
     }
 
@@ -355,7 +353,42 @@
       content: '';
       flex: 1;
       height: 1px;
-      background: linear-gradient(90deg, rgba(79, 111, 220, 0.6), rgba(42, 163, 199, 0));
+      background: linear-gradient(90deg, rgba(63, 125, 207, 0.6), rgba(79, 158, 184, 0));
+    }
+
+    .section-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      position: sticky;
+      top: 8px;
+      z-index: 80;
+      padding: 10px;
+      border-radius: var(--radius-md);
+      border: 1px solid rgba(122, 134, 179, 0.2);
+      background: rgba(11, 18, 32, 0.8);
+      backdrop-filter: blur(6px);
+      overflow-x: auto;
+    }
+
+    .section-nav-link {
+      text-decoration: none;
+      font-size: 13px;
+      color: var(--muted);
+      border: 1px solid rgba(122, 134, 179, 0.2);
+      border-radius: 999px;
+      padding: 6px 12px;
+      white-space: nowrap;
+      transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+    }
+
+    .section-nav-link:hover,
+    .section-nav-link:focus-visible {
+      color: var(--text);
+      border-color: rgba(63, 125, 207, 0.55);
+      background: rgba(63, 125, 207, 0.15);
+      outline: none;
     }
 
     .grid {
@@ -365,7 +398,7 @@
     }
 
     .panel {
-      padding: 20px;
+      padding: 18px;
       border-radius: var(--radius-lg);
       background: var(--panel);
       border: 1px solid var(--stroke);
@@ -376,7 +409,7 @@
       min-width: 0;
       position: relative;
       overflow: hidden;
-      animation: rise-in 0.75s ease both;
+      animation: rise-in 0.6s ease both;
       scroll-margin-top: 24px;
     }
 
@@ -391,40 +424,17 @@
     }
 
     .panel::before,
-    .stat-card::before {
-      content: '';
-      position: absolute;
-      inset: -40% -10% auto -10%;
-      height: 55%;
-      background: radial-gradient(circle, rgba(79, 111, 220, 0.28), transparent 65%);
-      opacity: 0;
-      transition: opacity 0.3s ease;
-      pointer-events: none;
-    }
-
+    .stat-card::before,
     .panel::after,
     .stat-card::after {
-      content: '';
-      position: absolute;
-      inset: auto -30% -60% -30%;
-      height: 140%;
-      background: radial-gradient(circle, rgba(42, 163, 199, 0.18), transparent 55%);
-      opacity: 0.2;
-      transform: translateY(0);
-      animation: none;
-      pointer-events: none;
-    }
-
-    .panel:hover::before,
-    .stat-card:hover::before {
-      opacity: 1;
+      display: none;
     }
 
     .panel:hover,
     .stat-card:hover {
-      transform: translateY(-2px);
-      border-color: rgba(130, 144, 190, 0.45);
-      box-shadow: 0 24px 54px rgba(5, 10, 30, 0.6);
+      transform: none;
+      border-color: rgba(130, 144, 190, 0.35);
+      box-shadow: var(--shadow);
     }
 
     .panel-head h3 {
@@ -436,6 +446,44 @@
       margin: 6px 0 0;
       color: var(--muted);
       font-size: 13px;
+    }
+
+    .panel-head-inline {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .panel-head-copy {
+      min-width: 0;
+    }
+
+    .panel-collapse-btn {
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+
+    .panel.panel-collapsible .panel-collapse-target {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 0;
+      max-height: 5000px;
+      opacity: 1;
+      overflow: hidden;
+      transition: max-height 0.26s ease, opacity 0.18s ease, margin 0.2s ease;
+    }
+
+    .panel.panel-collapsible.is-collapsed .panel-collapse-target {
+      max-height: 0;
+      opacity: 0;
+      pointer-events: none;
+      margin: 0;
+    }
+
+    .panel.panel-collapsible.is-collapsed {
+      gap: 8px;
     }
 
     .form-grid {
@@ -1087,7 +1135,7 @@
       overflow: auto;
       border-radius: var(--radius-md);
       border: 1px solid var(--stroke);
-      background: rgba(8, 12, 26, 0.8);
+      background: rgba(8, 12, 26, 0.72);
       -webkit-overflow-scrolling: touch;
     }
 
@@ -1227,11 +1275,11 @@
 
     .toolbar-sticky {
       position: sticky;
-      top: 10px;
+      top: 8px;
       z-index: 70;
       border: 1px solid rgba(124, 136, 179, 0.22);
       border-radius: var(--radius-sm);
-      background: rgba(8, 12, 26, 0.72);
+      background: rgba(10, 17, 30, 0.76);
       backdrop-filter: blur(6px);
       padding: 10px;
     }
@@ -1282,6 +1330,51 @@
       align-items: center;
       gap: 8px;
       flex-wrap: wrap;
+    }
+
+    .logs-toolbar {
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      margin-bottom: 10px;
+    }
+
+    .logs-panel .logs-table-wrap {
+      max-height: 420px;
+    }
+
+    .logs-summary {
+      margin-bottom: 4px;
+      border: 1px solid rgba(122, 134, 179, 0.2);
+      border-radius: var(--radius-sm);
+      background: rgba(8, 12, 26, 0.45);
+      padding: 8px 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .logs-summary strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .log-detail {
+      white-space: normal;
+      line-height: 1.35;
+      max-width: 560px;
+    }
+
+    .log-meta {
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .btn.is-active {
+      border-color: rgba(240, 111, 143, 0.5);
+      background: rgba(240, 111, 143, 0.16);
+      color: var(--danger);
     }
 
     .premium-tag {
@@ -1488,6 +1581,10 @@
       gap: 12px;
     }
 
+    body[data-density="compact"] .panel.panel-collapsible .panel-collapse-target {
+      gap: 10px;
+    }
+
     body[data-density="compact"] .btn {
       padding: 8px 14px;
       font-size: 13px;
@@ -1537,6 +1634,10 @@
 
     body[data-density="compact"] .list-pagination {
       padding: 6px 8px;
+    }
+
+    body[data-density="compact"] .logs-panel .logs-table-wrap {
+      max-height: 340px;
     }
 
     .runtime-summary {
@@ -2099,7 +2200,13 @@
       </div>
     </section>
 
-    <section class="section">
+    <nav class="section-nav" aria-label="Navigazione sezioni">
+      <a class="section-nav-link" href="#planningSection">Pianificazione</a>
+      <a class="section-nav-link" href="#contentSection">Contenuti</a>
+      <a class="section-nav-link" href="#operationsSection">Operativita</a>
+    </nav>
+
+    <section class="section" id="planningSection">
       <div class="section-title">Pianificazione</div>
       <div class="grid">
         <div class="panel span-4 allow-overflow" id="settingsPanel">
@@ -2217,27 +2324,32 @@
         </div>
       </div>
     </section>
-    <section class="section">
+    <section class="section" id="contentSection">
       <div class="section-title">Contenuti</div>
       <div class="grid">
-        <div class="panel span-5 allow-overflow" id="draftsPanel">
-          <div class="panel-head">
-            <h3>Bozze Telegram</h3>
-            <p>Seleziona una bozza in 1 clic e collegala subito al post.</p>
+        <div class="panel span-5 allow-overflow panel-collapsible" id="draftsPanel">
+          <div class="panel-head panel-head-inline">
+            <div class="panel-head-copy">
+              <h3>Bozze Telegram</h3>
+              <p>Seleziona una bozza in 1 clic e collegala subito al post.</p>
+            </div>
+            <button class="btn xs ghost panel-collapse-btn" type="button" data-action="panel-toggle" data-panel="draftsPanel" aria-expanded="true">Chiudi</button>
           </div>
-          <div class="row">
-            <button class="btn" id="pullDraftsBtn">Sincronizza bozze</button>
-            <button class="btn ghost" id="refreshDraftsBtn">Aggiorna elenco</button>
+          <div class="panel-collapse-target">
+            <div class="row">
+              <button class="btn" id="pullDraftsBtn">Sincronizza bozze</button>
+              <button class="btn ghost" id="refreshDraftsBtn">Aggiorna elenco</button>
+            </div>
+            <div class="drafts-toolbar">
+              <label class="field draft-search">
+                <span>Cerca bozza</span>
+                <input type="text" id="draftSearch" placeholder="ID, testo, tipo...">
+              </label>
+              <button class="btn ghost" id="useLatestDraftBtn" type="button">Usa ultima</button>
+            </div>
+            <div id="draftsList" class="drafts-list"></div>
+            <p class="hint">Le bozze compaiono dopo la sincronizzazione. Premi Usa: testo e pulsanti (se presenti) verranno importati automaticamente nel compositore.</p>
           </div>
-          <div class="drafts-toolbar">
-            <label class="field draft-search">
-              <span>Cerca bozza</span>
-              <input type="text" id="draftSearch" placeholder="ID, testo, tipo...">
-            </label>
-            <button class="btn ghost" id="useLatestDraftBtn" type="button">Usa ultima</button>
-          </div>
-          <div id="draftsList" class="drafts-list"></div>
-          <p class="hint">Le bozze compaiono dopo la sincronizzazione. Premi Usa: testo e pulsanti (se presenti) verranno importati automaticamente nel compositore.</p>
         </div>
 
         <div class="panel span-7 allow-overflow" id="postComposerPanel">
@@ -2307,7 +2419,7 @@
         </div>
       </div>
     </section>
-    <section class="section">
+    <section class="section" id="operationsSection">
       <div class="section-title">Operativita</div>
       <div class="grid">
         <div class="panel span-7" id="postsPanel">
@@ -2417,62 +2529,99 @@
           <div id="schedulePagination" class="list-pagination"></div>
         </div>
 
-        <div class="panel span-12">
-          <div class="panel-head">
-            <h3>Log Invii</h3>
-            <p>Storico invii riusciti e falliti.</p>
+        <div class="panel span-12 logs-panel panel-collapsible" id="logsPanel">
+          <div class="panel-head panel-head-inline">
+            <div class="panel-head-copy">
+              <h3>Log Invii</h3>
+              <p>Storico invii riusciti e falliti.</p>
+            </div>
+            <button class="btn xs ghost panel-collapse-btn" type="button" data-action="panel-toggle" data-panel="logsPanel" aria-expanded="true">Chiudi</button>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Ora</th>
-                  <th>Azienda</th>
-                  <th>Stato</th>
-                  <th>Dettagli</th>
-                </tr>
-              </thead>
-              <tbody id="logsTable"></tbody>
-            </table>
+          <div class="panel-collapse-target">
+            <div class="posts-toolbar logs-toolbar toolbar-sticky">
+              <label class="field">
+                <span>Cerca log</span>
+                <input type="text" id="logsSearch" placeholder="Azienda, errore, testo, ID...">
+              </label>
+              <label class="field">
+                <span>Stato</span>
+                <select id="logsStatusFilter" class="native-select">
+                  <option value="">Tutti</option>
+                  <option value="sent">Inviati</option>
+                  <option value="failed">Falliti</option>
+                  <option value="pending">In attesa</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Righe per pagina</span>
+                <select id="logsPageSize" class="native-select">
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                </select>
+              </label>
+              <button class="btn ghost toolbar-action" id="logsErrorsOnlyBtn" type="button">Solo errori</button>
+            </div>
+            <div id="logsSummary" class="logs-summary"></div>
+            <div class="table-wrap logs-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Ora</th>
+                    <th>Azienda</th>
+                    <th>Stato</th>
+                    <th>Dettagli</th>
+                  </tr>
+                </thead>
+                <tbody id="logsTable"></tbody>
+              </table>
+            </div>
+            <div id="logsPagination" class="list-pagination"></div>
           </div>
         </div>
 
-        <div class="panel span-12" id="analyticsPanel">
-          <div class="panel-head">
-            <h3>Analitica Aziende</h3>
-            <p>Pubblicazioni dal primo giorno campagna, copertura e fasce orarie piu calde.</p>
+        <div class="panel span-12 panel-collapsible" id="analyticsPanel">
+          <div class="panel-head panel-head-inline">
+            <div class="panel-head-copy">
+              <h3>Analitica Aziende</h3>
+              <p>Pubblicazioni dal primo giorno campagna, copertura e fasce orarie piu calde.</p>
+            </div>
+            <button class="btn xs ghost panel-collapse-btn" type="button" data-action="panel-toggle" data-panel="analyticsPanel" aria-expanded="true">Chiudi</button>
           </div>
-          <div id="analyticsSummary" class="runtime-summary"></div>
-          <p id="analyticsNote" class="hint analytics-note"></p>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Ora</th>
-                  <th>Reach</th>
-                  <th>Pubblicazioni</th>
-                  <th>Stato</th>
-                </tr>
-              </thead>
-              <tbody id="analyticsHoursTable"></tbody>
-            </table>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Azienda</th>
-                  <th>Inizio ADV</th>
-                  <th>Pubblicazioni</th>
-                  <th>Views</th>
-                  <th>Reach</th>
-                  <th>Pubbl. ore calde</th>
-                  <th>Reach ore calde</th>
-                  <th>Copertura views</th>
-                </tr>
-              </thead>
-              <tbody id="analyticsCompaniesTable"></tbody>
-            </table>
+          <div class="panel-collapse-target">
+            <div id="analyticsSummary" class="runtime-summary"></div>
+            <p id="analyticsNote" class="hint analytics-note"></p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Ora</th>
+                    <th>Reach</th>
+                    <th>Pubblicazioni</th>
+                    <th>Stato</th>
+                  </tr>
+                </thead>
+                <tbody id="analyticsHoursTable"></tbody>
+              </table>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Azienda</th>
+                    <th>Inizio ADV</th>
+                    <th>Pubblicazioni</th>
+                    <th>Views</th>
+                    <th>Reach</th>
+                    <th>Pubbl. ore calde</th>
+                    <th>Reach ore calde</th>
+                    <th>Copertura views</th>
+                  </tr>
+                </thead>
+                <tbody id="analyticsCompaniesTable"></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
@@ -2512,6 +2661,8 @@
     }
 
     const UI_DENSITY_STORAGE_KEY = 'yosupport_ui_density_v1';
+    const PANEL_COLLAPSE_STORAGE_KEY = 'yosupport_panel_collapse_v1';
+    const DEFAULT_COLLAPSED_PANELS = { logsPanel: 1, analyticsPanel: 1 };
 
     function loadUiDensity() {
       try {
@@ -2520,6 +2671,32 @@
       } catch (err) {
         return 'comfortable';
       }
+    }
+
+    function loadCollapsedPanels() {
+      try {
+        const raw = localStorage.getItem(PANEL_COLLAPSE_STORAGE_KEY);
+        if (raw === null) return { ...DEFAULT_COLLAPSED_PANELS };
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+        const sanitized = {};
+        Object.entries(parsed).forEach(([panelId, collapsed]) => {
+          if (!collapsed) return;
+          const normalizedId = String(panelId || '').trim();
+          if (!normalizedId) return;
+          sanitized[normalizedId] = 1;
+        });
+        return sanitized;
+      } catch (err) {
+        return { ...DEFAULT_COLLAPSED_PANELS };
+      }
+    }
+
+    function saveCollapsedPanels(value) {
+      try {
+        const payload = value && typeof value === 'object' ? value : {};
+        localStorage.setItem(PANEL_COLLAPSE_STORAGE_KEY, JSON.stringify(payload));
+      } catch (err) {}
     }
 
     const API = resolveApiBase();
@@ -2546,17 +2723,23 @@
       postsStatusFilter: '',
       scheduleSearch: '',
       scheduleStatusFilter: '',
+      logsSearch: '',
+      logsStatusFilter: '',
+      logsErrorsOnly: false,
       companiesPage: 1,
       postsPage: 1,
       schedulePage: 1,
+      logsPage: 1,
       companiesPageSize: 20,
       postsPageSize: 20,
       schedulePageSize: 40,
+      logsPageSize: 50,
       postsByCompanyVisible: {},
       companyPostsExpanded: {},
       companyPostsPage: {},
       companyPostsPageSizeByCompany: {},
       schedulerForecastPerPostExpanded: false,
+      collapsedPanels: loadCollapsedPanels(),
       uiDensity: loadUiDensity()
     };
     const POST_DRAFT_STORAGE_KEY = 'yosupport_post_form_draft_v1';
@@ -2567,6 +2750,7 @@
     const COMPANIES_PAGE_SIZE = 20;
     const POSTS_PAGE_SIZE = 20;
     const SCHEDULE_PAGE_SIZE = 40;
+    const LOGS_PAGE_SIZE = 50;
     const COMPANY_POST_PREVIEW_DEFAULT = 3;
     const COMPANY_POST_PREVIEW_STEP = 5;
     const COMPANY_POSTS_PAGE_SIZE_DEFAULT = 4;
@@ -2656,6 +2840,13 @@
       scheduleSummary: byId('scheduleSummary'),
       scheduleTable: byId('scheduleTable'),
       schedulePagination: byId('schedulePagination'),
+      logsPanel: byId('logsPanel'),
+      logsSearch: byId('logsSearch'),
+      logsStatusFilter: byId('logsStatusFilter'),
+      logsPageSize: byId('logsPageSize'),
+      logsErrorsOnlyBtn: byId('logsErrorsOnlyBtn'),
+      logsSummary: byId('logsSummary'),
+      logsPagination: byId('logsPagination'),
       analyticsPanel: byId('analyticsPanel'),
       analyticsSummary: byId('analyticsSummary'),
       analyticsNote: byId('analyticsNote'),
@@ -3225,8 +3416,60 @@
       }
     }
 
+    function isPanelCollapsed(panelId) {
+      if (!panelId) return false;
+      return Boolean(state.collapsedPanels?.[String(panelId).trim()]);
+    }
+
+    function applyPanelCollapsedState(panelId) {
+      const normalizedId = String(panelId || '').trim();
+      if (!normalizedId) return;
+      const panel = byId(normalizedId);
+      if (!panel) return;
+      const collapsed = isPanelCollapsed(normalizedId);
+      panel.classList.toggle('is-collapsed', collapsed);
+      const button = panel.querySelector(`.panel-collapse-btn[data-panel="${normalizedId}"]`);
+      if (button) {
+        button.textContent = collapsed ? 'Apri' : 'Chiudi';
+        button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        button.setAttribute('aria-label', collapsed ? 'Apri pannello' : 'Chiudi pannello');
+      }
+    }
+
+    function setPanelCollapsed(panelId, collapsed) {
+      const normalizedId = String(panelId || '').trim();
+      if (!normalizedId) return;
+      const next = { ...(state.collapsedPanels || {}) };
+      if (collapsed) {
+        next[normalizedId] = 1;
+      } else {
+        delete next[normalizedId];
+      }
+      state.collapsedPanels = next;
+      saveCollapsedPanels(next);
+      applyPanelCollapsedState(normalizedId);
+    }
+
+    function initCollapsiblePanels() {
+      const buttons = Array.from(document.querySelectorAll('.panel-collapse-btn[data-panel]'));
+      const knownPanels = new Set();
+      buttons.forEach((button) => {
+        const panelId = String(button.dataset.panel || '').trim();
+        if (!panelId) return;
+        knownPanels.add(panelId);
+        button.addEventListener('click', () => {
+          setPanelCollapsed(panelId, !isPanelCollapsed(panelId));
+        });
+      });
+      knownPanels.forEach((panelId) => applyPanelCollapsedState(panelId));
+    }
+
     function focusPanel(panelEl, focusEl) {
       if (!panelEl) return;
+      const panelId = String(panelEl.id || '').trim();
+      if (panelId && isPanelCollapsed(panelId)) {
+        setPanelCollapsed(panelId, false);
+      }
       panelEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
       panelEl.classList.add('focused');
       if (panelEl._focusTimer) clearTimeout(panelEl._focusTimer);
@@ -3883,6 +4126,34 @@
           translateDeliveryStatus(status),
           status,
           timeText
+        ].map((value) => String(value || '').toLowerCase()).join(' ');
+        return haystack.includes(query);
+      });
+    }
+
+    function getFilteredLogs() {
+      const query = normalizeSearchText(state.logsSearch);
+      const statusFilter = String(state.logsStatusFilter || '').toLowerCase();
+      const sorted = [...(state.logs || [])].sort((a, b) => {
+        const left = String(a?.createdAt || a?.date || '');
+        const right = String(b?.createdAt || b?.date || '');
+        return right.localeCompare(left);
+      });
+      return sorted.filter((log) => {
+        const status = String(log?.status || '').toLowerCase();
+        if (statusFilter && status !== statusFilter) return false;
+        if (!query) return true;
+        const details = log?.error || log?.postText || log?.draftCaption || log?.draftText || '';
+        const haystack = [
+          log?.id,
+          log?.postId,
+          log?.companyId,
+          log?.companyName,
+          details,
+          log?.trigger,
+          status,
+          translateDeliveryStatus(status),
+          formatDateTime(log?.createdAt || log?.date)
         ].map((value) => String(value || '').toLowerCase()).join(' ');
         return haystack.includes(query);
       });
@@ -4588,19 +4859,67 @@
       renderPagination(els.schedulePagination, pagination, 'schedule');
     }
 
+    function syncLogsErrorsOnlyButton() {
+      if (!els.logsErrorsOnlyBtn) return;
+      els.logsErrorsOnlyBtn.classList.toggle('is-active', Boolean(state.logsErrorsOnly));
+      els.logsErrorsOnlyBtn.textContent = state.logsErrorsOnly ? 'Mostra tutti' : 'Solo errori';
+    }
+
     function renderLogs() {
-      els.logsTable.innerHTML = state.logs.map((log) => {
-        const statusClass = log.status === 'sent' ? 'success' : log.status === 'failed' ? 'failed' : 'pending';
-        const statusLabel = translateDeliveryStatus(log.status || '');
+      if (!els.logsTable) return;
+      if (els.logsSearch && els.logsSearch.value !== state.logsSearch) {
+        els.logsSearch.value = state.logsSearch;
+      }
+      if (els.logsStatusFilter && String(els.logsStatusFilter.value || '') !== String(state.logsStatusFilter || '')) {
+        els.logsStatusFilter.value = String(state.logsStatusFilter || '');
+      }
+      const pageSize = Math.max(1, Number(state.logsPageSize || LOGS_PAGE_SIZE));
+      if (els.logsPageSize && String(els.logsPageSize.value || '') !== String(pageSize)) {
+        els.logsPageSize.value = String(pageSize);
+      }
+
+      const filteredLogs = getFilteredLogs();
+      const pagination = paginateRows(filteredLogs, state.logsPage, pageSize);
+      state.logsPage = pagination.page;
+
+      const logRows = pagination.items.map((log) => {
+        const status = String(log?.status || '').toLowerCase();
+        const statusClass = status === 'sent' ? 'success' : status === 'failed' ? 'failed' : 'pending';
+        const statusLabel = translateDeliveryStatus(status);
+        const details = String(log?.error || log?.postText || log?.draftCaption || log?.draftText || '').trim();
+        const shortDetails = details ? shorten(details, 130) : '-';
+        const trigger = String(log?.trigger || '').trim();
+        const postId = Number(log?.postId || 0) || null;
+        const companyLabel = log?.companyName || (log?.companyId ? `#${log.companyId}` : '-');
         return `
           <tr>
             <td>${formatDateTime(log.createdAt || log.date)}</td>
-            <td>${escapeHtml(log.companyName || '-')}</td>
-            <td><span class="pill ${statusClass}">${escapeHtml(statusLabel)}</span></td>
-            <td>${escapeHtml(shorten(log.error || log.postText || log.draftCaption || '', 80))}</td>
+            <td>${escapeHtml(companyLabel)}</td>
+            <td><span class="pill ${statusClass}">${escapeHtml(statusLabel || status || '-')}</span></td>
+            <td>
+              <div class="log-detail" title="${escapeHtml(details || '-')}">${escapeHtml(shortDetails)}</div>
+              <div class="log-meta">${escapeHtml(`Post ${postId ? `#${postId}` : '-'}`)}${trigger ? ` • ${escapeHtml(trigger)}` : ''}</div>
+            </td>
           </tr>
         `;
-      }).join('') || '<tr><td colspan="4" class="muted">Nessun log disponibile.</td></tr>';
+      }).join('');
+
+      els.logsTable.innerHTML = logRows || '<tr><td colspan="4" class="muted">Nessun log disponibile.</td></tr>';
+      if (els.logsSummary) {
+        const totalLogs = Array.isArray(state.logs) ? state.logs.length : 0;
+        const failedLogs = (state.logs || []).filter((log) => String(log?.status || '').toLowerCase() === 'failed').length;
+        const sentLogs = (state.logs || []).filter((log) => String(log?.status || '').toLowerCase() === 'sent').length;
+        els.logsSummary.innerHTML = `
+          <span>Mostrati <strong>${escapeHtml(String(pagination.from))}</strong>-<strong>${escapeHtml(String(pagination.to))}</strong> di <strong>${escapeHtml(String(pagination.totalItems))}</strong> filtrati</span>
+          <span>Totale log: <strong>${escapeHtml(String(totalLogs))}</strong></span>
+          <span>Inviati: <strong>${escapeHtml(String(sentLogs))}</strong></span>
+          <span>Falliti: <strong>${escapeHtml(String(failedLogs))}</strong></span>
+        `;
+      }
+      renderPagination(els.logsPagination, pagination, 'logs');
+      refreshCustomSelect(els.logsStatusFilter);
+      refreshCustomSelect(els.logsPageSize);
+      syncLogsErrorsOnlyButton();
     }
 
     function renderAnalytics() {
@@ -4718,7 +5037,12 @@
     function updateSummary() {
       const today = getTodayDateKey();
       const activePosts = state.posts.filter((post) => isPostActiveNow(post, today)).length;
-      const logsToday = state.logs.filter((log) => (log.date || '').startsWith(today)).length;
+      const logsToday = state.logs.filter((log) => {
+        const logDate = isValidDateString(log?.date)
+          ? log.date
+          : String(log?.createdAt || '').slice(0, 10);
+        return logDate === today;
+      }).length;
       const analyticsTotals = state.analytics?.totals || {};
       const leadHotHour = state.analytics?.hotHours?.[0]?.hour
         || state.analytics?.topHours?.[0]?.hour
@@ -5178,6 +5502,12 @@
         const totalPages = paginateRows(getFilteredScheduleItems(), state.schedulePage, state.schedulePageSize || SCHEDULE_PAGE_SIZE).totalPages;
         state.schedulePage = applyPageAction(state.schedulePage, totalPages);
         renderSchedule();
+        return;
+      }
+      if (target === 'logs') {
+        const totalPages = paginateRows(getFilteredLogs(), state.logsPage, state.logsPageSize || LOGS_PAGE_SIZE).totalPages;
+        state.logsPage = applyPageAction(state.logsPage, totalPages);
+        renderLogs();
       }
     }
 
@@ -5307,6 +5637,14 @@
         handlePaginationAction(target, action);
       });
     }
+    if (els.logsPagination) {
+      els.logsPagination.addEventListener('click', (event) => {
+        const action = event.target?.dataset?.action;
+        const target = event.target?.dataset?.target;
+        if (!action || !target) return;
+        handlePaginationAction(target, action);
+      });
+    }
     const scheduleForecastPreview = debounce(() => {
       loadSchedulerForecast({ silent: true, useFormValues: true });
     }, 260);
@@ -5353,6 +5691,41 @@
         state.schedulePageSize = Number.isFinite(parsed) && parsed > 0 ? parsed : SCHEDULE_PAGE_SIZE;
         state.schedulePage = 1;
         renderSchedule();
+      });
+    }
+    if (els.logsSearch) {
+      els.logsSearch.addEventListener('input', () => {
+        state.logsSearch = String(els.logsSearch.value || '');
+        state.logsPage = 1;
+        renderLogs();
+      });
+    }
+    if (els.logsStatusFilter) {
+      els.logsStatusFilter.addEventListener('change', () => {
+        state.logsStatusFilter = String(els.logsStatusFilter.value || '');
+        state.logsErrorsOnly = state.logsStatusFilter === 'failed';
+        state.logsPage = 1;
+        renderLogs();
+      });
+    }
+    if (els.logsPageSize) {
+      els.logsPageSize.addEventListener('change', () => {
+        const parsed = Number(els.logsPageSize.value || LOGS_PAGE_SIZE);
+        state.logsPageSize = Number.isFinite(parsed) && parsed > 0 ? parsed : LOGS_PAGE_SIZE;
+        state.logsPage = 1;
+        renderLogs();
+      });
+    }
+    if (els.logsErrorsOnlyBtn) {
+      els.logsErrorsOnlyBtn.addEventListener('click', () => {
+        state.logsErrorsOnly = !state.logsErrorsOnly;
+        state.logsStatusFilter = state.logsErrorsOnly ? 'failed' : '';
+        state.logsPage = 1;
+        if (els.logsStatusFilter) {
+          els.logsStatusFilter.value = state.logsStatusFilter;
+          refreshCustomSelect(els.logsStatusFilter);
+        }
+        renderLogs();
       });
     }
     if (els.scheduleTodayBtn) {
@@ -5586,15 +5959,19 @@
     document.querySelectorAll('.date-input').forEach(buildDatePicker);
     document.querySelectorAll('.time-input').forEach(buildTimePicker);
     applyUiDensity(state.uiDensity);
+    initCollapsiblePanels();
     syncAuthButton();
     els.scheduleDate.value = state.scheduleDate;
     if (els.scheduleSearch) els.scheduleSearch.value = state.scheduleSearch;
+    if (els.logsSearch) els.logsSearch.value = state.logsSearch;
     if (els.companiesTypeFilter) els.companiesTypeFilter.value = state.companiesTypeFilter;
     if (els.companiesPageSize) els.companiesPageSize.value = String(state.companiesPageSize);
     if (els.postsStatusFilter) els.postsStatusFilter.value = state.postsStatusFilter;
     if (els.postsPageSize) els.postsPageSize.value = String(state.postsPageSize);
     if (els.scheduleStatusFilter) els.scheduleStatusFilter.value = state.scheduleStatusFilter;
     if (els.schedulePageSize) els.schedulePageSize.value = String(state.schedulePageSize);
+    if (els.logsStatusFilter) els.logsStatusFilter.value = state.logsStatusFilter;
+    if (els.logsPageSize) els.logsPageSize.value = String(state.logsPageSize);
     setPostButtons([]);
     updatePostChecklist();
     refreshCustomSelect(els.postCompany);
@@ -5605,6 +5982,9 @@
     refreshCustomSelect(els.postsPageSize);
     refreshCustomSelect(els.scheduleStatusFilter);
     refreshCustomSelect(els.schedulePageSize);
+    refreshCustomSelect(els.logsStatusFilter);
+    refreshCustomSelect(els.logsPageSize);
+    syncLogsErrorsOnlyButton();
     loadAll().then(() => {
       restorePostFormDraft();
     }).catch(() => {});

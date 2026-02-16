@@ -86,6 +86,30 @@ function seedScheduleItem({
  return Number(result.lastInsertRowid);
 }
 
+function seedSentLog({ companyId, postId = null, createdAt = new Date().toISOString() } = {}) {
+ const date = String(createdAt).slice(0, 10);
+ db.prepare(`
+  INSERT INTO logs
+   (postId,companyId,companyName,platform,date,status,error,createdAt,trigger,publishedAt,sentChatId,sentMessageId,sentViews,viewsUpdatedAt)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ `).run(
+  postId,
+  companyId,
+  `Company ${companyId || 'N/A'}`,
+  'telegram',
+  date,
+  'sent',
+  null,
+  createdAt,
+  'manual',
+  createdAt,
+  null,
+  null,
+  null,
+  null
+ );
+}
+
 beforeEach(() => {
  resetDb();
 });
@@ -207,4 +231,137 @@ test('buildRuntimePlan does not place preferred post before preferred time', () 
  assert.equal(alphaSlotsBefore10.length, 0);
  const alphaSlots = plan.slots.filter((slot) => slot.post.id === 11);
  assert.ok(alphaSlots.length >= 1);
+});
+
+test('buildRuntimePlan avoids consecutive slots from the same company when alternatives exist', () => {
+ const today = getCurrentDateString();
+ const posts = [
+  { id: 101, companyId: 1, companyName: 'Alpha', companyPremium: 0, preferredTime: null },
+  { id: 102, companyId: 1, companyName: 'Alpha', companyPremium: 0, preferredTime: null },
+  { id: 201, companyId: 2, companyName: 'Beta', companyPremium: 0, preferredTime: null }
+ ];
+ const plan = buildRuntimePlan(today, posts, {
+  scheduleTime: '09:00',
+  runtimeEndTime: '10:40',
+  minIntervalMinutes: 20,
+  rotationGapMinutes: 0
+ }, {
+  startFromNow: false,
+  startCursor: 0
+ });
+
+ assert.ok(plan.slots.length >= 2);
+ for (let i = 1; i < plan.slots.length; i += 1) {
+  assert.notEqual(plan.slots[i].post.companyId, plan.slots[i - 1].post.companyId);
+ }
+});
+
+test('buildRuntimePlan prefers non-consecutive company even when preferred post is due', () => {
+ const today = getCurrentDateString();
+ const posts = [
+  { id: 301, companyId: 10, companyName: 'Alpha', companyPremium: 0, preferredTime: '09:00' },
+  { id: 302, companyId: 10, companyName: 'Alpha', companyPremium: 0, preferredTime: '09:20' },
+  { id: 401, companyId: 20, companyName: 'Beta', companyPremium: 0, preferredTime: null }
+ ];
+ const plan = buildRuntimePlan(today, posts, {
+  scheduleTime: '09:00',
+  runtimeEndTime: '10:00',
+  minIntervalMinutes: 20,
+  rotationGapMinutes: 0
+ }, {
+  startFromNow: false,
+  startCursor: 0
+ });
+
+ assert.ok(plan.slots.length >= 3);
+ assert.equal(plan.slots[0].post.companyId, 10);
+ assert.equal(plan.slots[1].post.companyId, 20);
+ assert.equal(plan.slots[1].source, 'rotation');
+});
+
+test('buildRuntimePlan still schedules when only one company is available', () => {
+ const today = getCurrentDateString();
+ const posts = [
+  { id: 501, companyId: 77, companyName: 'Solo', companyPremium: 0, preferredTime: null },
+  { id: 502, companyId: 77, companyName: 'Solo', companyPremium: 0, preferredTime: null }
+ ];
+ const plan = buildRuntimePlan(today, posts, {
+  scheduleTime: '09:00',
+  runtimeEndTime: '10:00',
+  minIntervalMinutes: 20,
+  rotationGapMinutes: 0
+ }, {
+  startFromNow: false,
+  startCursor: 0
+ });
+
+ assert.ok(plan.slots.length >= 2);
+ const allSameCompany = plan.slots.every((slot) => slot.post.companyId === 77);
+ assert.equal(allSameCompany, true);
+});
+
+test('buildRuntimePlan prioritizes under-served regular company when historical gap is large', () => {
+ const today = getCurrentDateString();
+ for (let i = 0; i < 40; i += 1) {
+  seedSentLog({ companyId: 1, postId: 9000 + i });
+ }
+ const posts = [
+  { id: 601, companyId: 1, companyName: 'Alpha', companyPremium: 0, preferredTime: null },
+  { id: 602, companyId: 2, companyName: 'Beta', companyPremium: 0, preferredTime: null }
+ ];
+ const plan = buildRuntimePlan(today, posts, {
+  scheduleTime: '09:00',
+  runtimeEndTime: '09:40',
+  minIntervalMinutes: 20,
+  rotationGapMinutes: 0
+ }, {
+  startFromNow: false,
+  startCursor: 0
+ });
+
+ const companySequence = plan.slots.map((slot) => Number(slot.post.companyId || 0));
+ assert.ok(companySequence.length >= 2);
+ assert.equal(companySequence[0], 2);
+ const alphaCount = companySequence.filter((companyId) => companyId === 1).length;
+ const betaCount = companySequence.filter((companyId) => companyId === 2).length;
+ assert.ok(betaCount >= alphaCount);
+});
+
+test('buildRuntimePlan keeps premium company ahead with x1.5 weighting', () => {
+ const today = getCurrentDateString();
+ const posts = [
+  { id: 701, companyId: 10, companyName: 'Alpha', companyPremium: 0, preferredTime: null },
+  { id: 702, companyId: 20, companyName: 'Beta', companyPremium: 0, preferredTime: null },
+  { id: 703, companyId: 30, companyName: 'Gamma', companyPremium: 1, preferredTime: null }
+ ];
+ const plan = buildRuntimePlan(today, posts, {
+  scheduleTime: '09:00',
+  runtimeEndTime: '09:59',
+  minIntervalMinutes: 1,
+  rotationGapMinutes: 0
+ }, {
+  startFromNow: false,
+  startCursor: 0
+ });
+
+ const counts = new Map();
+ for (const slot of plan.slots) {
+  const companyId = Number(slot.post.companyId || 0);
+  counts.set(companyId, (counts.get(companyId) || 0) + 1);
+ }
+ const alphaCount = counts.get(10) || 0;
+ const betaCount = counts.get(20) || 0;
+ const gammaPremiumCount = counts.get(30) || 0;
+
+ assert.ok(gammaPremiumCount > alphaCount);
+ assert.ok(gammaPremiumCount > betaCount);
+
+ const normalizedShares = [
+  alphaCount / 2,
+  betaCount / 2,
+  gammaPremiumCount / 3
+ ];
+ const maxShare = Math.max(...normalizedShares);
+ const minShare = Math.min(...normalizedShares);
+ assert.ok((maxShare - minShare) <= 1);
 });

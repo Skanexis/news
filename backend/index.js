@@ -929,6 +929,16 @@ function compareCompanyPosts(a, b) {
  return Number(a?.id || 0) - Number(b?.id || 0);
 }
 
+function getPostCompanyKey(post) {
+ const companyId = Number(post?.companyId || 0);
+ if (companyId) return `id:${companyId}`;
+ const companyName = normalizeText(post?.companyName);
+ if (companyName) return `name:${companyName.toLowerCase()}`;
+ const postId = Number(post?.id || 0);
+ if (postId) return `post:${postId}`;
+ return null;
+}
+
 function getPostRotationWeight(post) {
  return Number(post?.companyPremium) === 1 ? PREMIUM_ROTATION_WEIGHT : REGULAR_ROTATION_WEIGHT;
 }
@@ -988,30 +998,97 @@ function buildWeightedRotation(posts) {
  return { sequence, totalWeight, sortedPosts };
 }
 
+function getCompanySentCountMap(companyIds) {
+ const uniqueIds = Array.from(new Set((companyIds || [])
+  .map((id) => Number(id || 0))
+  .filter((id) => id > 0)));
+ if (!uniqueIds.length) return new Map();
+ const placeholders = uniqueIds.map(() => '?').join(',');
+ const rows = db.prepare(`
+  SELECT companyId, COUNT(*) as sentCount
+  FROM logs
+  WHERE platform = 'telegram'
+   AND status = 'sent'
+   AND companyId IN (${placeholders})
+  GROUP BY companyId
+ `).all(...uniqueIds);
+ const map = new Map();
+ for (const row of rows) {
+  const companyId = Number(row?.companyId || 0);
+  if (!companyId) continue;
+  map.set(companyId, Number(row?.sentCount || 0));
+ }
+ return map;
+}
+
+function getCyclicDistance(index, pointer, size) {
+ if (!size) return 0;
+ return (index - pointer + size) % size;
+}
+
 function buildRuntimePlan(targetDate, posts, config, options = {}) {
  const minIntervalMinutes = Math.max(1, Number(config.minIntervalMinutes) || 1);
  const rotationGapMinutes = Math.max(0, Number(config.rotationGapMinutes) || 0);
  const windowStart = timeToMinutes(config.scheduleTime);
  const windowEnd = timeToMinutes(config.runtimeEndTime);
- const rotation = buildWeightedRotation(posts);
- const sequence = rotation.sequence;
- const sortedPosts = rotation.sortedPosts;
+ const sortedPosts = [...posts].sort(compareCompanyPosts);
  const perPostCounts = new Map(sortedPosts.map((post) => [post.id, 0]));
  const preferredMinuteByPost = new Map();
  const pendingPreferred = [];
+ const companyMap = new Map();
  for (const post of sortedPosts) {
+  const companyKey = getPostCompanyKey(post) || `post:${post.id}`;
+  if (!companyMap.has(companyKey)) {
+   companyMap.set(companyKey, {
+    key: companyKey,
+    companyId: Number(post?.companyId || 0) || null,
+    companyName: normalizeText(post?.companyName) || null,
+    companyPremium: Number(post?.companyPremium) === 1 ? 1 : 0,
+    weight: getPostRotationWeight(post),
+    posts: [],
+    sentCount: 0,
+    plannedCount: 0,
+    postCursor: 0,
+    orderIndex: 0
+   });
+  }
+  const company = companyMap.get(companyKey);
+  company.posts.push(post);
+  if (Number(post?.companyPremium) === 1) {
+   company.companyPremium = 1;
+   company.weight = PREMIUM_ROTATION_WEIGHT;
+  }
   const preferredMinute = timeToMinutes(post?.preferredTime);
   if (preferredMinute === null) continue;
   preferredMinuteByPost.set(post.id, preferredMinute);
-  pendingPreferred.push({ post, preferredMinute });
+  pendingPreferred.push({ post, preferredMinute, companyKey });
  }
+ const companies = Array.from(companyMap.values()).sort((a, b) => {
+  const nameA = String(a?.companyName || '');
+  const nameB = String(b?.companyName || '');
+  const byName = nameA.localeCompare(nameB, 'en', { sensitivity: 'base' });
+  if (byName) return byName;
+  return String(a?.key || '').localeCompare(String(b?.key || ''), 'en', { sensitivity: 'base' });
+ });
+ for (let i = 0; i < companies.length; i += 1) {
+  companies[i].orderIndex = i;
+  companies[i].posts.sort(compareCompanyPosts);
+ }
+ const companyOrderIndex = new Map(companies.map((company, index) => [company.key, index]));
+ const sentCountByCompanyId = getCompanySentCountMap(companies.map((company) => company.companyId));
+ for (const company of companies) {
+  if (!company.companyId) continue;
+  company.sentCount = sentCountByCompanyId.get(company.companyId) || 0;
+ }
+ const sequenceLength = companies.length;
+ const totalWeight = companies.reduce((sum, company) => sum + Math.max(1, Number(company.weight) || 1), 0);
  pendingPreferred.sort((a, b) => {
   if (a.preferredMinute !== b.preferredMinute) return a.preferredMinute - b.preferredMinute;
   return compareCompanyPosts(a.post, b.post);
  });
  const defaultResult = {
-  sequenceLength: sequence.length,
-  totalWeight: rotation.totalWeight,
+  sequenceLength,
+  totalWeight,
   sortedPosts,
   perPostCounts,
   slots: [],
@@ -1023,7 +1100,7 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
   windowStartMinutes: windowStart,
   windowEndMinutes: windowEnd
  };
- if (!sequence.length || windowStart === null || windowEnd === null || windowEnd < windowStart) {
+ if (!sequenceLength || windowStart === null || windowEnd === null || windowEnd < windowStart) {
   return defaultResult;
  }
 
@@ -1036,68 +1113,192 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
  if (runtimeStartMinutes > windowEnd) {
   return {
    ...defaultResult,
-   startCursor: normalizeRotationCursor(options.startCursor, sequence.length),
-   endCursor: normalizeRotationCursor(options.startCursor, sequence.length),
+   startCursor: normalizeRotationCursor(options.startCursor, sequenceLength),
+   endCursor: normalizeRotationCursor(options.startCursor, sequenceLength),
    windowStartMinutes: runtimeStartMinutes
   };
  }
 
  const startCursor = options.startCursor === undefined || options.startCursor === null
-  ? getStoredRotationCursor(sequence.length)
-  : normalizeRotationCursor(options.startCursor, sequence.length);
+  ? getStoredRotationCursor(sequenceLength)
+  : normalizeRotationCursor(options.startCursor, sequenceLength);
  let pointer = startCursor;
  let currentMinutes = runtimeStartMinutes;
  const slots = [];
  const preferredReleased = new Set();
 
- const pickNextRotatingPost = () => {
-  if (!sequence.length) return { post: null, nextPointer: pointer };
-  for (let shift = 0; shift < sequence.length; shift += 1) {
-   const index = (pointer + shift) % sequence.length;
-   const candidate = sequence[index];
-   const preferredMinute = preferredMinuteByPost.get(candidate.id);
-   const waitingPreferredWindow = preferredMinute !== undefined &&
-    !preferredReleased.has(candidate.id) &&
-    currentMinutes < preferredMinute;
-   if (waitingPreferredWindow) continue;
-   return {
-    post: candidate,
-    nextPointer: (index + 1) % sequence.length
-   };
+ const isRotatingPostBlockedByPreferredWindow = (candidate) => {
+  const preferredMinute = preferredMinuteByPost.get(candidate.id);
+  const waitingPreferredWindow = preferredMinute !== undefined &&
+   !preferredReleased.has(candidate.id) &&
+   currentMinutes < preferredMinute;
+  return waitingPreferredWindow;
+ };
+
+ const hasAvailableRotatingPostInCompany = (company) => {
+  return company.posts.some((post) => !isRotatingPostBlockedByPreferredWindow(post));
+ };
+
+ const pickPostFromCompany = (company, lastPostId = null) => {
+  const totalPosts = company.posts.length;
+  if (!totalPosts) return null;
+  let fallback = null;
+  for (let shift = 0; shift < totalPosts; shift += 1) {
+   const index = (company.postCursor + shift) % totalPosts;
+   const candidate = company.posts[index];
+   if (isRotatingPostBlockedByPreferredWindow(candidate)) continue;
+   const nextCursor = (index + 1) % totalPosts;
+   if (!fallback) fallback = { post: candidate, nextCursor };
+   if (lastPostId && Number(candidate?.id || 0) === Number(lastPostId) && totalPosts > 1) {
+    continue;
+   }
+   return { post: candidate, nextCursor };
   }
-  return {
-   post: sequence[pointer],
-   nextPointer: (pointer + 1) % sequence.length
-  };
+  return fallback;
+ };
+
+ const pickBestCompanyFromKeys = (candidateKeys, lastCompanyKey = null, requireDifferentCompany = false) => {
+  const uniqueKeys = Array.from(new Set((candidateKeys || []).filter((key) => companyMap.has(key))));
+  if (!uniqueKeys.length) return null;
+  let keys = uniqueKeys;
+  if (requireDifferentCompany && lastCompanyKey) {
+   const filtered = keys.filter((key) => key !== lastCompanyKey);
+   if (!filtered.length) return null;
+   keys = filtered;
+  }
+  let best = null;
+  for (const key of keys) {
+   const company = companyMap.get(key);
+   if (!company) continue;
+   const weight = Math.max(1, Number(company.weight) || 1);
+   const score = (Number(company.sentCount || 0) + Number(company.plannedCount || 0)) / weight;
+   const orderIndex = companyOrderIndex.get(company.key) ?? 0;
+   const distance = getCyclicDistance(orderIndex, pointer, sequenceLength);
+   if (!best) {
+    best = { company, score, distance };
+    continue;
+   }
+   if (score < best.score - 1e-9) {
+    best = { company, score, distance };
+    continue;
+   }
+   if (Math.abs(score - best.score) <= 1e-9) {
+    if (distance < best.distance) {
+     best = { company, score, distance };
+     continue;
+    }
+    if (distance === best.distance) {
+     const byName = String(company.companyName || '').localeCompare(String(best.company.companyName || ''), 'en', { sensitivity: 'base' });
+     if (byName < 0) {
+      best = { company, score, distance };
+      continue;
+     }
+     if (byName === 0) {
+      const byKey = String(company.key || '').localeCompare(String(best.company.key || ''), 'en', { sensitivity: 'base' });
+      if (byKey < 0) {
+       best = { company, score, distance };
+      }
+     }
+    }
+   }
+  }
+  return best?.company || null;
+ };
+
+ const getDuePreferredEntries = () => {
+  const due = [];
+  for (let i = 0; i < pendingPreferred.length; i += 1) {
+   const entry = pendingPreferred[i];
+   if (entry.preferredMinute > currentMinutes) break;
+   due.push({ index: i, entry });
+  }
+  return due;
+ };
+
+ const pickDuePreferredPostForCompany = (preferredCompany, duePreferredRows) => {
+  if (!preferredCompany) return null;
+  const dueRow = duePreferredRows.find((row) => row.entry.companyKey === preferredCompany.key);
+  if (!dueRow) return null;
+  const selectedPost = dueRow.entry.post;
+  pendingPreferred.splice(dueRow.index, 1);
+  pointer = (preferredCompany.orderIndex + 1) % sequenceLength;
+  const preferredPostIndex = preferredCompany.posts.findIndex((item) => Number(item?.id || 0) === Number(selectedPost?.id || 0));
+  if (preferredPostIndex >= 0) {
+   preferredCompany.postCursor = (preferredPostIndex + 1) % preferredCompany.posts.length;
+  }
+  return selectedPost;
+ };
+
+ const getRotatingCompanyKeys = () => {
+  return companies
+   .filter((company) => hasAvailableRotatingPostInCompany(company))
+   .map((company) => company.key);
  };
 
  while (currentMinutes <= windowEnd) {
   let post = null;
   let usedPreferredOverride = false;
-  const duePreferredIndex = pendingPreferred.findIndex((entry) => entry.preferredMinute <= currentMinutes);
-  if (duePreferredIndex >= 0) {
-   post = pendingPreferred[duePreferredIndex].post;
-   pendingPreferred.splice(duePreferredIndex, 1);
+  const previousSlot = slots[slots.length - 1];
+  const lastCompanyKey = getPostCompanyKey(previousSlot?.post);
+  const lastPostId = Number(previousSlot?.post?.id || 0) || null;
+
+  const duePreferred = getDuePreferredEntries();
+  const duePreferredCompanyKeys = Array.from(new Set(duePreferred.map((row) => row.entry.companyKey)));
+  const rotatingCompanyKeys = getRotatingCompanyKeys();
+
+  const preferredDifferentCompany = pickBestCompanyFromKeys(duePreferredCompanyKeys, lastCompanyKey, Boolean(lastCompanyKey));
+  post = pickDuePreferredPostForCompany(preferredDifferentCompany, duePreferred);
+  if (post) {
    usedPreferredOverride = true;
-  } else {
-   const hasAllowedRotatingPost = sequence.some((candidate) => {
-    const preferredMinute = preferredMinuteByPost.get(candidate.id);
-    return preferredMinute === undefined || preferredReleased.has(candidate.id) || currentMinutes >= preferredMinute;
-   });
-   if (!hasAllowedRotatingPost && pendingPreferred.length) {
+  }
+
+  if (!post) {
+   const rotatingDifferentCompany = pickBestCompanyFromKeys(rotatingCompanyKeys, lastCompanyKey, Boolean(lastCompanyKey));
+   if (rotatingDifferentCompany) {
+    const pickedPost = pickPostFromCompany(rotatingDifferentCompany, lastPostId);
+    if (pickedPost) {
+     post = pickedPost.post;
+     rotatingDifferentCompany.postCursor = pickedPost.nextCursor;
+     pointer = (rotatingDifferentCompany.orderIndex + 1) % sequenceLength;
+    }
+   }
+  }
+
+  if (!post) {
+   const preferredAnyCompany = pickBestCompanyFromKeys(duePreferredCompanyKeys);
+   post = pickDuePreferredPostForCompany(preferredAnyCompany, duePreferred);
+   if (post) {
+    usedPreferredOverride = true;
+   }
+  }
+
+  if (!post) {
+   const rotatingAnyCompany = pickBestCompanyFromKeys(rotatingCompanyKeys);
+   if (rotatingAnyCompany) {
+    const pickedPost = pickPostFromCompany(rotatingAnyCompany, lastPostId);
+    if (pickedPost) {
+     post = pickedPost.post;
+     rotatingAnyCompany.postCursor = pickedPost.nextCursor;
+     pointer = (rotatingAnyCompany.orderIndex + 1) % sequenceLength;
+    }
+   }
+   if (!post && !rotatingCompanyKeys.length && pendingPreferred.length) {
     const nextPreferredMinute = pendingPreferred[0].preferredMinute;
     if (nextPreferredMinute > currentMinutes) {
      currentMinutes = nextPreferredMinute;
      continue;
     }
    }
-   const picked = pickNextRotatingPost();
-   post = picked.post;
-   pointer = picked.nextPointer;
   }
+
   if (!post) break;
   if (preferredMinuteByPost.has(post.id)) {
    preferredReleased.add(post.id);
+  }
+  const selectedCompanyKey = getPostCompanyKey(post);
+  const selectedCompany = selectedCompanyKey ? companyMap.get(selectedCompanyKey) : null;
+  if (selectedCompany) {
+   selectedCompany.plannedCount += 1;
   }
   slots.push({
    post,
@@ -1111,12 +1312,12 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
  }
 
  const totalPublications = slots.length;
- const fullRotations = sequence.length ? Math.floor(totalPublications / sequence.length) : 0;
- const partialPublications = sequence.length ? totalPublications % sequence.length : 0;
+ const fullRotations = sequenceLength ? Math.floor(totalPublications / sequenceLength) : 0;
+ const partialPublications = sequenceLength ? totalPublications % sequenceLength : 0;
 
  return {
-  sequenceLength: sequence.length,
-  totalWeight: rotation.totalWeight,
+  sequenceLength,
+  totalWeight,
   sortedPosts,
   perPostCounts,
   slots,

@@ -11,14 +11,6 @@ dotenv.config();
 const app = express();
 app.use(express.json({ limit: '3mb' }));
 
-app.use((req, res, next) => {
- res.setHeader('Access-Control-Allow-Origin', '*');
- res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
- res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
- if (req.method === 'OPTIONS') return res.sendStatus(200);
- next();
-});
-
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 const CRON_TIME = process.env.CRON_TIME || '0 9 * * *';
 const CRON_TZ = process.env.CRON_TZ || null;
@@ -27,6 +19,11 @@ let cronTzFallbackWarned = false;
 const DB_PATH = process.env.DB_PATH || 'db.sqlite';
 const PORT = Number(process.env.PORT || 3000);
 const RUNTIME_DISABLED = process.env.DISABLE_RUNTIME === '1' || process.env.NODE_ENV === 'test';
+const ENABLE_SECURITY_HEADERS = process.env.ENABLE_SECURITY_HEADERS !== '0';
+const CORS_ORIGIN_RAW = normalizeText(process.env.CORS_ORIGIN) || '*';
+const CORS_ALLOWED_ORIGINS = CORS_ORIGIN_RAW === '*'
+ ? ['*']
+ : CORS_ORIGIN_RAW.split(',').map((item) => item.trim()).filter(Boolean);
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
@@ -41,6 +38,33 @@ const MAX_POST_BUTTONS = 8;
 const MAX_POST_BUTTON_TEXT_LENGTH = 64;
 const REGULAR_ROTATION_WEIGHT = 2;
 const PREMIUM_ROTATION_WEIGHT = 3;
+const DEFAULT_LOGS_PAGE_SIZE = 50;
+const MAX_LOGS_PAGE_SIZE = 200;
+const ANALYTICS_CACHE_TTL_MS = parsePositiveInt(process.env.ANALYTICS_CACHE_TTL_MS, 30000, 1000, 3600000);
+
+app.use((req, res, next) => {
+ const requestOrigin = normalizeText(req.headers.origin);
+ if (CORS_ALLOWED_ORIGINS.includes('*')) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+ } else if (requestOrigin && CORS_ALLOWED_ORIGINS.includes(requestOrigin)) {
+  res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+  res.setHeader('Vary', 'Origin');
+ }
+ res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+ res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+ if (ENABLE_SECURITY_HEADERS) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  const forwardedProto = normalizeText(req.headers['x-forwarded-proto']);
+  if (req.secure || forwardedProto === 'https') {
+   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+ }
+ if (req.method === 'OPTIONS') return res.sendStatus(200);
+ next();
+});
 
 function badRequest(res, message) {
  return res.status(400).send({ ok: false, error: message });
@@ -91,6 +115,69 @@ function normalizeText(value) {
 function normalizeUrl(value) {
  const trimmed = String(value || '').trim();
  return trimmed ? trimmed : null;
+}
+
+function parsePositiveInt(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGER) {
+ const parsed = Number(value);
+ if (!Number.isFinite(parsed)) return fallback;
+ const normalized = Math.floor(parsed);
+ if (normalized < min) return fallback;
+ return Math.min(normalized, max);
+}
+
+function normalizeLogStatus(value) {
+ const normalized = String(value || '').trim().toLowerCase();
+ if (normalized === 'sent' || normalized === 'failed' || normalized === 'pending') {
+  return normalized;
+ }
+ return '';
+}
+
+function escapeSqlLikePattern(value) {
+ return String(value || '')
+  .replace(/\\/g, '\\\\')
+  .replace(/%/g, '\\%')
+  .replace(/_/g, '\\_');
+}
+
+function buildLogsQueryParts(filters = {}) {
+ const status = normalizeLogStatus(filters.status);
+ const queryText = normalizeText(filters.query);
+ const clauses = [`logs.platform = 'telegram'`];
+ const params = [];
+
+ if (status) {
+  clauses.push('logs.status = ?');
+  params.push(status);
+ }
+
+ if (queryText) {
+  const like = `%${escapeSqlLikePattern(String(queryText).toLowerCase())}%`;
+  const searchableFields = [
+   'LOWER(CAST(logs.id AS TEXT))',
+   'LOWER(CAST(logs.postId AS TEXT))',
+   'LOWER(CAST(COALESCE(logs.companyId, posts.companyId) AS TEXT))',
+   'LOWER(COALESCE(logs.companyName, companies.name, \'\'))',
+   'LOWER(COALESCE(logs.error, \'\'))',
+   'LOWER(COALESCE(posts.text, \'\'))',
+   'LOWER(COALESCE(drafts.caption, \'\'))',
+   'LOWER(COALESCE(drafts.text, \'\'))',
+   'LOWER(COALESCE(logs.trigger, \'\'))',
+   'LOWER(COALESCE(logs.status, \'\'))',
+   'LOWER(COALESCE(logs.createdAt, logs.date, \'\'))'
+  ];
+  clauses.push(`(${searchableFields.map((field) => `${field} LIKE ? ESCAPE '\\'`).join(' OR ')})`);
+  for (let i = 0; i < searchableFields.length; i += 1) {
+   params.push(like);
+  }
+ }
+
+ return {
+  whereSql: `WHERE ${clauses.join('\n  AND ')}`,
+  params,
+  status,
+  queryText: queryText || ''
+ };
 }
 
 function isHttpUrl(value) {
@@ -505,7 +592,7 @@ function updateLogViewsFromTelegramMessage(message) {
  const views = parseTelegramViews(message.views);
  if (!messageId || !chatId || views === null) return;
  const updatedAt = new Date().toISOString();
- db.prepare(`
+ const updateResult = db.prepare(`
   UPDATE logs
    SET sentViews = ?,
     viewsUpdatedAt = ?,
@@ -515,6 +602,9 @@ function updateLogViewsFromTelegramMessage(message) {
     AND sentMessageId = ?
     AND (sentChatId = ? OR sentChatId IS NULL)
  `).run(views, updatedAt, messageId, chatId, messageId, chatId);
+ if (updateResult.changes) {
+  invalidateAnalyticsReportCache();
+ }
 }
 
 async function handleTelegramMessage(message) {
@@ -670,10 +760,11 @@ function insertLog(post, status, error, trigger, dateOverride, deliveryMeta) {
   trigger || 'schedule',
   createdAt,
   sentChatId,
-  sentMessageId,
-  sentViews,
-  sentViews !== null ? createdAt : null
+ sentMessageId,
+ sentViews,
+ sentViews !== null ? createdAt : null
  );
+ invalidateAnalyticsReportCache();
 }
 
 function toHourLabel(value) {
@@ -689,6 +780,31 @@ function toDatePart(value) {
  if (text.length < 10) return null;
  const datePart = text.slice(0, 10);
  return isValidDateString(datePart) ? datePart : null;
+}
+
+let analyticsReportCache = {
+ payload: null,
+ expiresAt: 0
+};
+
+function invalidateAnalyticsReportCache() {
+ analyticsReportCache = {
+  payload: null,
+  expiresAt: 0
+ };
+}
+
+function getCachedCompanyAnalyticsReport() {
+ const now = Date.now();
+ if (analyticsReportCache.payload && analyticsReportCache.expiresAt > now) {
+  return analyticsReportCache.payload;
+ }
+ const payload = buildCompanyAnalyticsReport();
+ analyticsReportCache = {
+  payload,
+  expiresAt: now + ANALYTICS_CACHE_TTL_MS
+ };
+ return payload;
 }
 
 function buildCompanyAnalyticsReport() {
@@ -1806,6 +1922,8 @@ ensureColumn('logs', 'viewsUpdatedAt', 'TEXT');
 ensureColumn('schedule_items', 'processingStartedAt', 'TEXT');
 ensureColumn('schedule_items', 'rotationCursorAfter', 'INTEGER');
 db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_message_chat ON logs(platform, sentMessageId, sentChatId)').run();
+db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_platform_status_id ON logs(platform, status, id DESC)').run();
+db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_platform_date ON logs(platform, date)').run();
 
 ensureColumn('drafts', 'source', 'TEXT');
 ensureColumn('drafts', 'chatId', 'TEXT');
@@ -1932,6 +2050,7 @@ app.post('/companies', (req, res) => {
  db.prepare(`INSERT INTO companies (name, preferredTime, premium)
   VALUES (?,?,?)
  `).run(name, preferredTime, premium);
+ invalidateAnalyticsReportCache();
  res.send({ ok: true });
 });
 
@@ -1948,6 +2067,7 @@ app.put('/companies/:id', (req, res) => {
   name=?, preferredTime=?, premium=?
   WHERE id=?
  `).run(name, preferredTime, premium, id);
+ invalidateAnalyticsReportCache();
  res.send({ ok: true });
 });
 
@@ -1957,6 +2077,7 @@ app.delete('/companies/:id', (req, res) => {
  const count = db.prepare('SELECT COUNT(*) as count FROM posts WHERE companyId = ? AND platform = \'telegram\'').get(id).count;
  if (count > 0) return badRequest(res, 'Company has posts. Delete or move posts first.');
  db.prepare('DELETE FROM companies WHERE id = ?').run(id);
+ invalidateAnalyticsReportCache();
  res.send({ ok: true });
 });
 
@@ -2056,6 +2177,7 @@ app.post('/posts', (req, res) => {
   }
  }
 
+ invalidateAnalyticsReportCache();
  res.send({ ok: true, id: postId, linkId });
 });
 
@@ -2123,6 +2245,7 @@ app.put('/posts/:id', (req, res) => {
    serializedButtons,
    id
   );
+ invalidateAnalyticsReportCache();
  res.send({ ok: true });
 });
 
@@ -2134,6 +2257,7 @@ app.delete('/posts/:id', (req, res) => {
   db.prepare('DELETE FROM posts WHERE id = ?').run(postId);
  });
  removePost(id);
+ invalidateAnalyticsReportCache();
  res.send({ ok: true });
 });
 
@@ -2159,6 +2283,7 @@ app.post('/posts/:id/renew', (req, res) => {
  const newEndDate = addDaysToDateString(base, 30);
  if (!newEndDate) return res.status(500).send({ ok: false, error: 'Renew failed' });
  db.prepare('UPDATE posts SET endDate=?, active=1 WHERE id=?').run(newEndDate, id);
+ invalidateAnalyticsReportCache();
  res.send({ ok: true, endDate: newEndDate });
 });
 
@@ -2290,12 +2415,100 @@ app.post('/telegram/pull', async (req, res) => {
 
 app.get('/analytics/companies', (_, res) => {
  try {
-  res.send(buildCompanyAnalyticsReport());
+  res.send(getCachedCompanyAnalyticsReport());
  } catch (e) {
   res.status(500).send({ ok: false, error: e.message });
  }
 });
 
+app.get('/logs/query', (req, res) => {
+ const page = parsePositiveInt(req.query?.page, 1, 1, 1000000);
+ const pageSize = parsePositiveInt(req.query?.pageSize, DEFAULT_LOGS_PAGE_SIZE, 1, MAX_LOGS_PAGE_SIZE);
+ const filters = buildLogsQueryParts({
+  status: req.query?.status,
+  query: req.query?.q
+ });
+
+ const totalRow = db.prepare(`
+  SELECT COUNT(*) as total
+  FROM logs
+  LEFT JOIN posts ON logs.postId = posts.id
+  LEFT JOIN drafts ON posts.draftId = drafts.id
+  LEFT JOIN companies ON COALESCE(logs.companyId, posts.companyId) = companies.id
+  ${filters.whereSql}
+ `).get(...filters.params);
+ const total = Number(totalRow?.total || 0);
+ const totalPages = Math.max(1, Math.ceil(total / pageSize));
+ const normalizedPage = Math.min(Math.max(1, page), totalPages);
+ const offset = (normalizedPage - 1) * pageSize;
+
+ const items = db.prepare(`
+  SELECT logs.*,
+   posts.text as postText,
+   posts.draftId as draftId,
+   posts.platform as postPlatform,
+   drafts.mediaType as draftMediaType,
+   drafts.caption as draftCaption,
+   drafts.text as draftText,
+   COALESCE(logs.companyName, companies.name) as companyName
+  FROM logs
+  LEFT JOIN posts ON logs.postId = posts.id
+  LEFT JOIN drafts ON posts.draftId = drafts.id
+  LEFT JOIN companies ON COALESCE(logs.companyId, posts.companyId) = companies.id
+  ${filters.whereSql}
+  ORDER BY logs.id DESC
+  LIMIT ? OFFSET ?
+ `).all(...filters.params, pageSize, offset);
+
+ const statusRows = db.prepare(`
+  SELECT status, COUNT(*) as total
+  FROM logs
+  WHERE platform = 'telegram'
+  GROUP BY status
+ `).all();
+ const statusCounts = { sent: 0, failed: 0, pending: 0, other: 0, total: 0 };
+ for (const row of statusRows) {
+  const key = String(row?.status || '').toLowerCase();
+  const value = Number(row?.total || 0);
+  if (key === 'sent' || key === 'failed' || key === 'pending') {
+   statusCounts[key] = value;
+  } else {
+   statusCounts.other += value;
+  }
+  statusCounts.total += value;
+ }
+ if (!statusCounts.other) {
+  delete statusCounts.other;
+ }
+
+ const today = getCurrentDateString();
+ const todayRow = db.prepare(`
+  SELECT COUNT(*) as total
+  FROM logs
+  WHERE platform = 'telegram'
+   AND (date = ? OR (date IS NULL AND substr(createdAt, 1, 10) = ?))
+ `).get(today, today);
+
+ const from = total ? offset + 1 : 0;
+ const to = total ? Math.min(offset + items.length, total) : 0;
+ res.send({
+  items,
+  page: normalizedPage,
+  pageSize,
+  total,
+  totalPages,
+  from,
+  to,
+  statusCounts,
+  todayCount: Number(todayRow?.total || 0),
+  filters: {
+   status: filters.status || '',
+   q: filters.queryText
+  }
+ });
+});
+
+// Backward-compatible full logs endpoint kept for older clients.
 app.get('/logs', (_, res) => res.send(db.prepare(`
  SELECT logs.*,
   posts.text as postText,
@@ -2303,6 +2516,7 @@ app.get('/logs', (_, res) => res.send(db.prepare(`
   posts.platform as postPlatform,
   drafts.mediaType as draftMediaType,
   drafts.caption as draftCaption,
+  drafts.text as draftText,
   COALESCE(logs.companyName, companies.name) as companyName
  FROM logs
  LEFT JOIN posts ON logs.postId = posts.id

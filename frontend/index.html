@@ -2706,6 +2706,17 @@
       drafts: [],
       posts: [],
       logs: [],
+      logsTotal: 0,
+      logsTotalPages: 1,
+      logsFrom: 0,
+      logsTo: 0,
+      logsStatusCounts: {
+        sent: 0,
+        failed: 0,
+        pending: 0,
+        total: 0
+      },
+      logsTodayCount: 0,
       scheduleItems: [],
       schedulerForecast: null,
       analytics: null,
@@ -2755,7 +2766,8 @@
     const COMPANY_POST_PREVIEW_STEP = 5;
     const COMPANY_POSTS_PAGE_SIZE_DEFAULT = 4;
     const SCHEDULER_FORECAST_PER_POST_LIMIT = 12;
-    const LIVE_RUNTIME_REFRESH_MS = 30000;
+    const LOGS_SEARCH_DEBOUNCE_MS = 250;
+    const LIVE_RUNTIME_REFRESH_MS = 10000;
     const API_AUTH_STORAGE_KEY = 'yosupport_api_basic_auth_v1';
     let postDraftRestoreDone = false;
     let savingPost = false;
@@ -4132,31 +4144,63 @@
     }
 
     function getFilteredLogs() {
-      const query = normalizeSearchText(state.logsSearch);
-      const statusFilter = String(state.logsStatusFilter || '').toLowerCase();
-      const sorted = [...(state.logs || [])].sort((a, b) => {
-        const left = String(a?.createdAt || a?.date || '');
-        const right = String(b?.createdAt || b?.date || '');
-        return right.localeCompare(left);
-      });
-      return sorted.filter((log) => {
-        const status = String(log?.status || '').toLowerCase();
-        if (statusFilter && status !== statusFilter) return false;
-        if (!query) return true;
-        const details = log?.error || log?.postText || log?.draftCaption || log?.draftText || '';
-        const haystack = [
-          log?.id,
-          log?.postId,
-          log?.companyId,
-          log?.companyName,
-          details,
-          log?.trigger,
-          status,
-          translateDeliveryStatus(status),
-          formatDateTime(log?.createdAt || log?.date)
-        ].map((value) => String(value || '').toLowerCase()).join(' ');
-        return haystack.includes(query);
-      });
+      return Array.isArray(state.logs) ? [...state.logs] : [];
+    }
+
+    function buildLogsQueryPath() {
+      const params = new URLSearchParams();
+      params.set('page', String(Math.max(1, Number(state.logsPage || 1))));
+      params.set('pageSize', String(Math.max(1, Number(state.logsPageSize || LOGS_PAGE_SIZE))));
+      const status = String(state.logsStatusFilter || '').trim().toLowerCase();
+      const query = String(state.logsSearch || '').trim();
+      if (status) params.set('status', status);
+      if (query) params.set('q', query);
+      return `/logs/query?${params.toString()}`;
+    }
+
+    function applyLogsPayload(payload) {
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const pageSizeRaw = Number(payload?.pageSize || state.logsPageSize || LOGS_PAGE_SIZE);
+      const pageSize = Number.isFinite(pageSizeRaw) && pageSizeRaw > 0 ? Math.floor(pageSizeRaw) : LOGS_PAGE_SIZE;
+      const totalRaw = Number(payload?.total || 0);
+      const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? Math.floor(totalRaw) : 0;
+      const totalPagesRaw = Number(payload?.totalPages || Math.ceil(total / pageSize) || 1);
+      const totalPages = Math.max(1, Number.isFinite(totalPagesRaw) ? Math.floor(totalPagesRaw) : 1);
+      const pageRaw = Number(payload?.page || state.logsPage || 1);
+      const page = Math.min(Math.max(1, Number.isFinite(pageRaw) ? Math.floor(pageRaw) : 1), totalPages);
+      const fromRaw = Number(payload?.from);
+      const toRaw = Number(payload?.to);
+      const from = total ? (Number.isFinite(fromRaw) ? Math.max(1, Math.floor(fromRaw)) : ((page - 1) * pageSize) + 1) : 0;
+      const to = total ? (Number.isFinite(toRaw) ? Math.max(from, Math.floor(toRaw)) : Math.min(from + items.length - 1, total)) : 0;
+      const statusCounts = payload?.statusCounts || {};
+      const sent = Math.max(0, Number(statusCounts.sent || 0));
+      const failed = Math.max(0, Number(statusCounts.failed || 0));
+      const pending = Math.max(0, Number(statusCounts.pending || 0));
+      const totalStatusRaw = Number(statusCounts.total);
+      const statusTotal = Number.isFinite(totalStatusRaw)
+        ? Math.max(0, Math.floor(totalStatusRaw))
+        : sent + failed + pending + Math.max(0, Number(statusCounts.other || 0));
+
+      state.logs = items;
+      state.logsPage = page;
+      state.logsPageSize = pageSize;
+      state.logsTotal = total;
+      state.logsTotalPages = totalPages;
+      state.logsFrom = from;
+      state.logsTo = Math.min(total, to);
+      state.logsStatusCounts = {
+        sent,
+        failed,
+        pending,
+        total: statusTotal
+      };
+      state.logsTodayCount = Math.max(0, Number(payload?.todayCount || 0));
+    }
+
+    async function loadLogs() {
+      const payload = await fetchJson(buildLogsQueryPath());
+      applyLogsPayload(payload);
+      renderLogs();
     }
 
     async function loadAll() {
@@ -4171,11 +4215,11 @@
           els.scheduleDate.value = state.scheduleDate;
         }
         const scheduleDate = state.scheduleDate;
-        const [companies, drafts, posts, logs, settings, scheduleItems, schedulerForecast, analytics] = await Promise.all([
+        const [companies, drafts, posts, logsPayload, settings, scheduleItems, schedulerForecast, analytics] = await Promise.all([
           fetchJson('/companies'),
           fetchJson('/drafts'),
           fetchJson('/posts'),
-          fetchJson('/logs'),
+          fetchJson(buildLogsQueryPath()),
           fetchJson('/settings'),
           fetchJson(`/schedule/items?date=${scheduleDate}`),
           fetchJson(`/schedule/forecast?date=${scheduleDate}`),
@@ -4201,7 +4245,7 @@
         state.postsByCompanyVisible = Object.fromEntries(
           Object.entries(state.postsByCompanyVisible || {}).filter(([companyId]) => availableCompanyIds.has(Number(companyId)))
         );
-        state.logs = logs || [];
+        applyLogsPayload(logsPayload);
         state.settings = settings || null;
         state.scheduleItems = scheduleItems || [];
         state.schedulerForecast = schedulerForecast || null;
@@ -4244,22 +4288,27 @@
           }
         }
         const scheduleDate = state.scheduleDate;
-        const [scheduleItems, schedulerForecast, logs, analytics] = await Promise.all([
+        const [scheduleItems, schedulerForecast, logsPayload, analytics] = await Promise.all([
           fetchJson(`/schedule/items?date=${scheduleDate}`),
           fetchJson(`/schedule/forecast?date=${scheduleDate}`),
-          fetchJson('/logs'),
+          fetchJson(buildLogsQueryPath()),
           fetchJson('/analytics/companies')
         ]);
         state.scheduleItems = scheduleItems || [];
         state.schedulerForecast = schedulerForecast || null;
-        state.logs = logs || [];
+        applyLogsPayload(logsPayload);
         state.analytics = analytics || null;
         renderSchedule();
         renderSchedulerForecast();
         renderLogs();
         renderAnalytics();
         updateSummary();
-      } catch (err) {} finally {
+      } catch (err) {
+        if (Number(err?.status) === 401) {
+          setStatus('Accesso API richiesto. Usa username/password Nginx.', 'error');
+          return;
+        }
+      } finally {
         liveRuntimeRefreshInFlight = false;
       }
     }
@@ -4879,8 +4928,21 @@
       }
 
       const filteredLogs = getFilteredLogs();
-      const pagination = paginateRows(filteredLogs, state.logsPage, pageSize);
-      state.logsPage = pagination.page;
+      const totalItems = Math.max(0, Number(state.logsTotal || 0));
+      const totalPages = Math.max(1, Number(state.logsTotalPages || Math.ceil(totalItems / pageSize) || 1));
+      const page = Math.min(Math.max(1, Number(state.logsPage || 1)), totalPages);
+      state.logsPage = page;
+      const from = totalItems ? Math.max(1, Number(state.logsFrom || ((page - 1) * pageSize) + 1)) : 0;
+      const to = totalItems ? Math.min(totalItems, Math.max(from - 1, Number(state.logsTo || (from + filteredLogs.length - 1)))) : 0;
+      const pagination = {
+        page,
+        totalPages,
+        totalItems,
+        pageSize,
+        from,
+        to,
+        items: filteredLogs
+      };
 
       const logRows = pagination.items.map((log) => {
         const status = String(log?.status || '').toLowerCase();
@@ -4906,9 +4968,10 @@
 
       els.logsTable.innerHTML = logRows || '<tr><td colspan="4" class="muted">Nessun log disponibile.</td></tr>';
       if (els.logsSummary) {
-        const totalLogs = Array.isArray(state.logs) ? state.logs.length : 0;
-        const failedLogs = (state.logs || []).filter((log) => String(log?.status || '').toLowerCase() === 'failed').length;
-        const sentLogs = (state.logs || []).filter((log) => String(log?.status || '').toLowerCase() === 'sent').length;
+        const sentLogs = Math.max(0, Number(state.logsStatusCounts?.sent || 0));
+        const failedLogs = Math.max(0, Number(state.logsStatusCounts?.failed || 0));
+        const pendingLogs = Math.max(0, Number(state.logsStatusCounts?.pending || 0));
+        const totalLogs = Math.max(0, Number(state.logsStatusCounts?.total || (sentLogs + failedLogs + pendingLogs)));
         els.logsSummary.innerHTML = `
           <span>Mostrati <strong>${escapeHtml(String(pagination.from))}</strong>-<strong>${escapeHtml(String(pagination.to))}</strong> di <strong>${escapeHtml(String(pagination.totalItems))}</strong> filtrati</span>
           <span>Totale log: <strong>${escapeHtml(String(totalLogs))}</strong></span>
@@ -5037,12 +5100,15 @@
     function updateSummary() {
       const today = getTodayDateKey();
       const activePosts = state.posts.filter((post) => isPostActiveNow(post, today)).length;
-      const logsToday = state.logs.filter((log) => {
-        const logDate = isValidDateString(log?.date)
-          ? log.date
-          : String(log?.createdAt || '').slice(0, 10);
-        return logDate === today;
-      }).length;
+      const logsTodayCountRaw = Number(state.logsTodayCount);
+      const logsToday = Number.isFinite(logsTodayCountRaw) && logsTodayCountRaw >= 0
+        ? Math.floor(logsTodayCountRaw)
+        : state.logs.filter((log) => {
+          const logDate = isValidDateString(log?.date)
+            ? log.date
+            : String(log?.createdAt || '').slice(0, 10);
+          return logDate === today;
+        }).length;
       const analyticsTotals = state.analytics?.totals || {};
       const leadHotHour = state.analytics?.hotHours?.[0]?.hour
         || state.analytics?.topHours?.[0]?.hour
@@ -5477,7 +5543,16 @@
       return true;
     }
 
-    function handlePaginationAction(target, action) {
+    async function refreshLogsPanel() {
+      try {
+        await loadLogs();
+      } catch (err) {
+        if (Number(err?.status) === 401) return;
+        setStatus(err.message || 'Caricamento log fallito.', 'error');
+      }
+    }
+
+    async function handlePaginationAction(target, action) {
       if (!target || !action) return;
       const applyPageAction = (currentPage, totalPages) => {
         if (action === 'page-first') return 1;
@@ -5505,9 +5580,11 @@
         return;
       }
       if (target === 'logs') {
-        const totalPages = paginateRows(getFilteredLogs(), state.logsPage, state.logsPageSize || LOGS_PAGE_SIZE).totalPages;
-        state.logsPage = applyPageAction(state.logsPage, totalPages);
-        renderLogs();
+        const totalPages = Math.max(1, Number(state.logsTotalPages || 1));
+        const nextPage = applyPageAction(state.logsPage, totalPages);
+        if (nextPage === state.logsPage) return;
+        state.logsPage = nextPage;
+        await refreshLogsPanel();
       }
     }
 
@@ -5693,11 +5770,14 @@
         renderSchedule();
       });
     }
+    const refreshLogsPanelDebounced = debounce(() => {
+      refreshLogsPanel();
+    }, LOGS_SEARCH_DEBOUNCE_MS);
     if (els.logsSearch) {
       els.logsSearch.addEventListener('input', () => {
         state.logsSearch = String(els.logsSearch.value || '');
         state.logsPage = 1;
-        renderLogs();
+        refreshLogsPanelDebounced();
       });
     }
     if (els.logsStatusFilter) {
@@ -5705,7 +5785,7 @@
         state.logsStatusFilter = String(els.logsStatusFilter.value || '');
         state.logsErrorsOnly = state.logsStatusFilter === 'failed';
         state.logsPage = 1;
-        renderLogs();
+        refreshLogsPanel();
       });
     }
     if (els.logsPageSize) {
@@ -5713,7 +5793,7 @@
         const parsed = Number(els.logsPageSize.value || LOGS_PAGE_SIZE);
         state.logsPageSize = Number.isFinite(parsed) && parsed > 0 ? parsed : LOGS_PAGE_SIZE;
         state.logsPage = 1;
-        renderLogs();
+        refreshLogsPanel();
       });
     }
     if (els.logsErrorsOnlyBtn) {
@@ -5725,7 +5805,7 @@
           els.logsStatusFilter.value = state.logsStatusFilter;
           refreshCustomSelect(els.logsStatusFilter);
         }
-        renderLogs();
+        refreshLogsPanel();
       });
     }
     if (els.scheduleTodayBtn) {
@@ -5987,11 +6067,19 @@
     syncLogsErrorsOnlyButton();
     loadAll().then(() => {
       restorePostFormDraft();
+      refreshLiveRuntimePanels();
     }).catch(() => {});
     setInterval(() => {
       if (document.hidden) return;
       refreshLiveRuntimePanels();
     }, LIVE_RUNTIME_REFRESH_MS);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) return;
+      refreshLiveRuntimePanels();
+    });
+    window.addEventListener('focus', () => {
+      refreshLiveRuntimePanels();
+    });
   </script>
 </body>
 </html>

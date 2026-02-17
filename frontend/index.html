@@ -2767,13 +2767,21 @@
     const COMPANY_POSTS_PAGE_SIZE_DEFAULT = 4;
     const SCHEDULER_FORECAST_PER_POST_LIMIT = 12;
     const LOGS_SEARCH_DEBOUNCE_MS = 250;
-    const LIVE_RUNTIME_REFRESH_MS = 10000;
+    const LIVE_RUNTIME_TICK_MS = 5000;
+    const LIVE_RUNTIME_LOGS_REFRESH_MS = 10000;
+    const LIVE_RUNTIME_SCHEDULE_REFRESH_MS = 20000;
+    const LIVE_RUNTIME_FORECAST_REFRESH_MS = 30000;
+    const LIVE_RUNTIME_ANALYTICS_REFRESH_MS = 45000;
     const API_AUTH_STORAGE_KEY = 'yosupport_api_basic_auth_v1';
     let postDraftRestoreDone = false;
     let savingPost = false;
     let savingCompany = false;
     let savingSettings = false;
     let liveRuntimeRefreshInFlight = false;
+    let lastLiveLogsRefreshAt = 0;
+    let lastLiveScheduleRefreshAt = 0;
+    let lastLiveForecastRefreshAt = 0;
+    let lastLiveAnalyticsRefreshAt = 0;
     let apiAuthToken = loadApiAuthToken();
     let authInProgress = false;
 
@@ -3958,6 +3966,31 @@
       return getTodayDateKey();
     }
 
+    function markLiveRefreshTimestamp(target, timestamp = Date.now()) {
+      if (target === 'logs') {
+        lastLiveLogsRefreshAt = timestamp;
+        return;
+      }
+      if (target === 'schedule') {
+        lastLiveScheduleRefreshAt = timestamp;
+        return;
+      }
+      if (target === 'forecast') {
+        lastLiveForecastRefreshAt = timestamp;
+        return;
+      }
+      if (target === 'analytics') {
+        lastLiveAnalyticsRefreshAt = timestamp;
+      }
+    }
+
+    function markLiveRefreshSnapshot(timestamp = Date.now()) {
+      markLiveRefreshTimestamp('logs', timestamp);
+      markLiveRefreshTimestamp('schedule', timestamp);
+      markLiveRefreshTimestamp('forecast', timestamp);
+      markLiveRefreshTimestamp('analytics', timestamp);
+    }
+
     function translateDeliveryStatus(status) {
       if (status === 'sent') return 'inviato';
       if (status === 'failed') return 'fallito';
@@ -3991,6 +4024,7 @@
       try {
         const forecast = await fetchJson(buildSchedulerForecastPath(useFormValues));
         state.schedulerForecast = forecast || null;
+        markLiveRefreshTimestamp('forecast');
         renderSchedulerForecast();
       } catch (err) {
         state.schedulerForecast = { error: err.message || 'Calcolo previsione fallito.' };
@@ -4195,6 +4229,7 @@
         total: statusTotal
       };
       state.logsTodayCount = Math.max(0, Number(payload?.todayCount || 0));
+      markLiveRefreshTimestamp('logs');
     }
 
     async function loadLogs() {
@@ -4250,6 +4285,7 @@
         state.scheduleItems = scheduleItems || [];
         state.schedulerForecast = schedulerForecast || null;
         state.analytics = analytics || null;
+        markLiveRefreshSnapshot();
         renderAll();
         setStatus('Aggiornato.', 'success');
       } catch (err) {
@@ -4265,6 +4301,7 @@
       try {
         const items = await fetchJson(`/schedule/items?date=${state.scheduleDate}`);
         state.scheduleItems = items || [];
+        markLiveRefreshTimestamp('schedule');
         renderSchedule();
         await loadSchedulerForecast({ silent: true, useFormValues: true });
         updateSummary();
@@ -4273,11 +4310,19 @@
       }
     }
 
-    async function refreshLiveRuntimePanels() {
+    async function refreshLiveRuntimePanels(options = {}) {
       if (liveRuntimeRefreshInFlight) return;
+      const force = Boolean(options?.force);
+      const now = Date.now();
+      const shouldRefreshLogs = force || !lastLiveLogsRefreshAt || ((now - lastLiveLogsRefreshAt) >= LIVE_RUNTIME_LOGS_REFRESH_MS);
+      const shouldRefreshSchedule = force || !lastLiveScheduleRefreshAt || ((now - lastLiveScheduleRefreshAt) >= LIVE_RUNTIME_SCHEDULE_REFRESH_MS);
+      const shouldRefreshForecast = force || !lastLiveForecastRefreshAt || ((now - lastLiveForecastRefreshAt) >= LIVE_RUNTIME_FORECAST_REFRESH_MS);
+      const shouldRefreshAnalytics = force || !lastLiveAnalyticsRefreshAt || ((now - lastLiveAnalyticsRefreshAt) >= LIVE_RUNTIME_ANALYTICS_REFRESH_MS);
+      if (!shouldRefreshLogs && !shouldRefreshSchedule && !shouldRefreshForecast && !shouldRefreshAnalytics) return;
+
       liveRuntimeRefreshInFlight = true;
       try {
-        if (state.scheduleDatePinnedToToday) {
+        if (state.scheduleDatePinnedToToday && (shouldRefreshSchedule || shouldRefreshForecast)) {
           await syncRuntimeDate();
           const today = getTodayDateKey();
           if (state.scheduleDate !== today) {
@@ -4287,26 +4332,73 @@
             }
           }
         }
+
         const scheduleDate = state.scheduleDate;
-        const [scheduleItems, schedulerForecast, logsPayload, analytics] = await Promise.all([
-          fetchJson(`/schedule/items?date=${scheduleDate}`),
-          fetchJson(`/schedule/forecast?date=${scheduleDate}`),
-          fetchJson(buildLogsQueryPath()),
-          fetchJson('/analytics/companies')
-        ]);
-        state.scheduleItems = scheduleItems || [];
-        state.schedulerForecast = schedulerForecast || null;
-        applyLogsPayload(logsPayload);
-        state.analytics = analytics || null;
-        renderSchedule();
-        renderSchedulerForecast();
-        renderLogs();
-        renderAnalytics();
-        updateSummary();
-      } catch (err) {
-        if (Number(err?.status) === 401) {
+        const requests = [];
+        if (shouldRefreshSchedule) {
+          requests.push({ key: 'schedule', promise: fetchJson(`/schedule/items?date=${scheduleDate}`) });
+        }
+        if (shouldRefreshForecast) {
+          requests.push({ key: 'forecast', promise: fetchJson(`/schedule/forecast?date=${scheduleDate}`) });
+        }
+        if (shouldRefreshLogs) {
+          requests.push({ key: 'logs', promise: fetchJson(buildLogsQueryPath()) });
+        }
+        if (shouldRefreshAnalytics) {
+          requests.push({ key: 'analytics', promise: fetchJson('/analytics/companies') });
+        }
+        if (!requests.length) return;
+
+        const settled = await Promise.allSettled(requests.map((entry) => entry.promise));
+        let unauthorized = false;
+        let shouldRenderSchedule = false;
+        let shouldRenderForecast = false;
+        let shouldRenderLogs = false;
+        let shouldRenderAnalytics = false;
+
+        settled.forEach((result, index) => {
+          const key = requests[index]?.key;
+          if (result.status !== 'fulfilled') {
+            const error = result.reason;
+            if (Number(error?.status) === 401) {
+              unauthorized = true;
+            }
+            return;
+          }
+          if (key === 'schedule') {
+            state.scheduleItems = Array.isArray(result.value) ? result.value : [];
+            markLiveRefreshTimestamp('schedule');
+            shouldRenderSchedule = true;
+            return;
+          }
+          if (key === 'forecast') {
+            state.schedulerForecast = result.value || null;
+            markLiveRefreshTimestamp('forecast');
+            shouldRenderForecast = true;
+            return;
+          }
+          if (key === 'logs') {
+            applyLogsPayload(result.value);
+            shouldRenderLogs = true;
+            return;
+          }
+          if (key === 'analytics') {
+            state.analytics = result.value || null;
+            markLiveRefreshTimestamp('analytics');
+            shouldRenderAnalytics = true;
+          }
+        });
+
+        if (shouldRenderSchedule) renderSchedule();
+        if (shouldRenderForecast) renderSchedulerForecast();
+        if (shouldRenderLogs) renderLogs();
+        if (shouldRenderAnalytics) renderAnalytics();
+        if (shouldRenderSchedule || shouldRenderLogs || shouldRenderAnalytics) {
+          updateSummary();
+        }
+
+        if (unauthorized) {
           setStatus('Accesso API richiesto. Usa username/password Nginx.', 'error');
-          return;
         }
       } finally {
         liveRuntimeRefreshInFlight = false;
@@ -6067,18 +6159,17 @@
     syncLogsErrorsOnlyButton();
     loadAll().then(() => {
       restorePostFormDraft();
-      refreshLiveRuntimePanels();
     }).catch(() => {});
     setInterval(() => {
       if (document.hidden) return;
       refreshLiveRuntimePanels();
-    }, LIVE_RUNTIME_REFRESH_MS);
+    }, LIVE_RUNTIME_TICK_MS);
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) return;
-      refreshLiveRuntimePanels();
+      refreshLiveRuntimePanels({ force: true });
     });
     window.addEventListener('focus', () => {
-      refreshLiveRuntimePanels();
+      refreshLiveRuntimePanels({ force: true });
     });
   </script>
 </body>

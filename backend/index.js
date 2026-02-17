@@ -41,6 +41,8 @@ const PREMIUM_ROTATION_WEIGHT = 3;
 const DEFAULT_LOGS_PAGE_SIZE = 50;
 const MAX_LOGS_PAGE_SIZE = 200;
 const ANALYTICS_CACHE_TTL_MS = parsePositiveInt(process.env.ANALYTICS_CACHE_TTL_MS, 30000, 1000, 3600000);
+const FORECAST_CACHE_TTL_MS = parsePositiveInt(process.env.FORECAST_CACHE_TTL_MS, 20000, 1000, 600000);
+const FORECAST_CACHE_MAX_ITEMS = parsePositiveInt(process.env.FORECAST_CACHE_MAX_ITEMS, 120, 10, 1000);
 
 app.use((req, res, next) => {
  const requestOrigin = normalizeText(req.headers.origin);
@@ -603,7 +605,7 @@ function updateLogViewsFromTelegramMessage(message) {
     AND (sentChatId = ? OR sentChatId IS NULL)
  `).run(views, updatedAt, messageId, chatId, messageId, chatId);
  if (updateResult.changes) {
-  invalidateAnalyticsReportCache();
+  invalidateDerivedCaches({ forecast: false });
  }
 }
 
@@ -764,7 +766,7 @@ function insertLog(post, status, error, trigger, dateOverride, deliveryMeta) {
  sentViews,
  sentViews !== null ? createdAt : null
  );
- invalidateAnalyticsReportCache();
+ invalidateDerivedCaches();
 }
 
 function toHourLabel(value) {
@@ -786,12 +788,30 @@ let analyticsReportCache = {
  payload: null,
  expiresAt: 0
 };
+let scheduleForecastCache = new Map();
+let scheduleForecastVersion = 1;
 
 function invalidateAnalyticsReportCache() {
  analyticsReportCache = {
   payload: null,
   expiresAt: 0
  };
+}
+
+function invalidateScheduleForecastCache() {
+ scheduleForecastVersion += 1;
+ scheduleForecastCache.clear();
+}
+
+function invalidateDerivedCaches(options = {}) {
+ const invalidateAnalytics = options.analytics !== false;
+ const invalidateForecast = options.forecast !== false;
+ if (invalidateAnalytics) {
+  invalidateAnalyticsReportCache();
+ }
+ if (invalidateForecast) {
+  invalidateScheduleForecastCache();
+ }
 }
 
 function getCachedCompanyAnalyticsReport() {
@@ -804,6 +824,52 @@ function getCachedCompanyAnalyticsReport() {
   payload,
   expiresAt: now + ANALYTICS_CACHE_TTL_MS
  };
+ return payload;
+}
+
+function getCachedScheduleForecast(targetDate, config, options = {}) {
+ const startFromNow = Boolean(options.startFromNow);
+ const explicitCursor = Number(options.startCursor);
+ const cursorToken = Number.isFinite(explicitCursor)
+  ? `explicit:${Math.floor(explicitCursor)}`
+  : `stored:${String(getSetting('runtimeRotationCursor') || '0')}`;
+ const key = [
+  scheduleForecastVersion,
+  targetDate,
+  config.scheduleTime,
+  config.runtimeEndTime,
+  Number(config.minIntervalMinutes) || 0,
+  Number(config.rotationGapMinutes) || 0,
+  startFromNow ? 1 : 0,
+  cursorToken
+ ].join('|');
+ const now = Date.now();
+ const cached = scheduleForecastCache.get(key);
+ if (cached && cached.expiresAt > now) {
+  return cached.payload;
+ }
+ if (cached) {
+  scheduleForecastCache.delete(key);
+ }
+
+ const posts = getActiveTelegramPostsForDate(targetDate);
+ const startCursor = Number.isFinite(explicitCursor)
+  ? Math.floor(explicitCursor)
+  : getStoredRotationCursor(posts.length);
+ const payload = calculateScheduleForecast(targetDate, posts, config, {
+  ...options,
+  startFromNow,
+  startCursor
+ });
+ scheduleForecastCache.set(key, {
+  payload,
+  expiresAt: now + FORECAST_CACHE_TTL_MS
+ });
+ while (scheduleForecastCache.size > FORECAST_CACHE_MAX_ITEMS) {
+  const oldestKey = scheduleForecastCache.keys().next().value;
+  if (oldestKey === undefined) break;
+  scheduleForecastCache.delete(oldestKey);
+ }
  return payload;
 }
 
@@ -1651,6 +1717,7 @@ function storeRotationCursorFromScheduleItem(item) {
  if (date) {
   setSetting('runtimeRotationDate', date);
  }
+ invalidateDerivedCaches({ analytics: false });
 }
 
 let scheduleProcessing = false;
@@ -2000,6 +2067,7 @@ app.put('/settings', (req, res) => {
  setSetting('runtimeEndTime', runtimeEndTime);
  setSetting('minIntervalMinutes', String(Math.floor(minIntervalMinutesRaw)));
  setSetting('rotationGapMinutes', String(Math.floor(rotationGapMinutesRaw)));
+ invalidateDerivedCaches({ analytics: false });
 
  configureScheduleJob();
  let runNowResult = null;
@@ -2050,7 +2118,7 @@ app.post('/companies', (req, res) => {
  db.prepare(`INSERT INTO companies (name, preferredTime, premium)
   VALUES (?,?,?)
  `).run(name, preferredTime, premium);
- invalidateAnalyticsReportCache();
+ invalidateDerivedCaches();
  res.send({ ok: true });
 });
 
@@ -2067,7 +2135,7 @@ app.put('/companies/:id', (req, res) => {
   name=?, preferredTime=?, premium=?
   WHERE id=?
  `).run(name, preferredTime, premium, id);
- invalidateAnalyticsReportCache();
+ invalidateDerivedCaches();
  res.send({ ok: true });
 });
 
@@ -2077,7 +2145,7 @@ app.delete('/companies/:id', (req, res) => {
  const count = db.prepare('SELECT COUNT(*) as count FROM posts WHERE companyId = ? AND platform = \'telegram\'').get(id).count;
  if (count > 0) return badRequest(res, 'Company has posts. Delete or move posts first.');
  db.prepare('DELETE FROM companies WHERE id = ?').run(id);
- invalidateAnalyticsReportCache();
+ invalidateDerivedCaches();
  res.send({ ok: true });
 });
 
@@ -2177,7 +2245,7 @@ app.post('/posts', (req, res) => {
   }
  }
 
- invalidateAnalyticsReportCache();
+ invalidateDerivedCaches();
  res.send({ ok: true, id: postId, linkId });
 });
 
@@ -2245,7 +2313,7 @@ app.put('/posts/:id', (req, res) => {
    serializedButtons,
    id
   );
- invalidateAnalyticsReportCache();
+ invalidateDerivedCaches();
  res.send({ ok: true });
 });
 
@@ -2257,7 +2325,7 @@ app.delete('/posts/:id', (req, res) => {
   db.prepare('DELETE FROM posts WHERE id = ?').run(postId);
  });
  removePost(id);
- invalidateAnalyticsReportCache();
+ invalidateDerivedCaches();
  res.send({ ok: true });
 });
 
@@ -2283,7 +2351,7 @@ app.post('/posts/:id/renew', (req, res) => {
  const newEndDate = addDaysToDateString(base, 30);
  if (!newEndDate) return res.status(500).send({ ok: false, error: 'Renew failed' });
  db.prepare('UPDATE posts SET endDate=?, active=1 WHERE id=?').run(newEndDate, id);
- invalidateAnalyticsReportCache();
+ invalidateDerivedCaches();
  res.send({ ok: true, endDate: newEndDate });
 });
 
@@ -2338,14 +2406,13 @@ app.get('/schedule/forecast', (req, res) => {
   return badRequest(res, 'Runtime end time must be after start time');
  }
 
- const forecastConfig = {
-  scheduleTime,
-  runtimeEndTime,
-  minIntervalMinutes: Math.floor(minIntervalMinutes),
-  rotationGapMinutes: Math.floor(rotationGapMinutes)
- };
- const posts = getActiveTelegramPostsForDate(targetDate);
- res.send(calculateScheduleForecast(targetDate, posts, forecastConfig, { startFromNow }));
+const forecastConfig = {
+ scheduleTime,
+ runtimeEndTime,
+ minIntervalMinutes: Math.floor(minIntervalMinutes),
+ rotationGapMinutes: Math.floor(rotationGapMinutes)
+};
+ res.send(getCachedScheduleForecast(targetDate, forecastConfig, { startFromNow }));
 });
 
 app.get('/schedule/items', (req, res) => {

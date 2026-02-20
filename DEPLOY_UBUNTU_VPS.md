@@ -349,7 +349,7 @@ sudo systemctl restart yosupport-backend
 sudo systemctl status yosupport-backend
 ```
 
-После обновления проверьте `https://your-domain.com/api/health` и UI.
+После обновления проверьте `https://your-domaiTn.com/api/health` и UI.
 
 ---
 

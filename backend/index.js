@@ -43,6 +43,10 @@ const MAX_LOGS_PAGE_SIZE = 200;
 const ANALYTICS_CACHE_TTL_MS = parsePositiveInt(process.env.ANALYTICS_CACHE_TTL_MS, 30000, 1000, 3600000);
 const FORECAST_CACHE_TTL_MS = parsePositiveInt(process.env.FORECAST_CACHE_TTL_MS, 20000, 1000, 600000);
 const FORECAST_CACHE_MAX_ITEMS = parsePositiveInt(process.env.FORECAST_CACHE_MAX_ITEMS, 120, 10, 1000);
+const TELEGRAM_API_TIMEOUT_MS = parsePositiveInt(process.env.TELEGRAM_API_TIMEOUT_MS, 15000, 1000, 120000);
+const TELEGRAM_API_MAX_RETRIES = parsePositiveInt(process.env.TELEGRAM_API_MAX_RETRIES, 2, 0, 6);
+const TELEGRAM_API_RETRY_BASE_MS = parsePositiveInt(process.env.TELEGRAM_API_RETRY_BASE_MS, 1000, 100, 30000);
+const TELEGRAM_API_RETRY_MAX_MS = parsePositiveInt(process.env.TELEGRAM_API_RETRY_MAX_MS, 15000, 1000, 120000);
 
 app.use((req, res, next) => {
  const requestOrigin = normalizeText(req.headers.origin);
@@ -533,22 +537,119 @@ function hasNonEmptyValue(value) {
  return String(value ?? '').trim() !== '';
 }
 
+function sleep(ms) {
+ const delayMs = Number(ms);
+ return new Promise((resolve) => setTimeout(resolve, Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 0));
+}
+
+function sanitizeTelegramErrorMessage(message) {
+ const raw = String(message ?? '').trim();
+ if (!raw) return 'Telegram request failed';
+ const masked = raw
+  .replace(/(https:\/\/api\.telegram\.org\/bot)[^/\s]+/gi, '$1<redacted>')
+  .replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot<redacted>');
+ if (/reason:\s*$/i.test(masked)) {
+  return `${masked} network error`;
+ }
+ return masked;
+}
+
+function formatTelegramApiError(method, message) {
+ const safeMessage = sanitizeTelegramErrorMessage(message);
+ return `Telegram ${method} failed: ${safeMessage}`;
+}
+
+function isRetryableTelegramStatus(status) {
+ return status === 408 || status === 429 || (status >= 500 && status <= 599);
+}
+
+function isRetryableTelegramNetworkError(error) {
+ const code = String(error?.code || error?.cause?.code || '').toUpperCase();
+ if ([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ECONNREFUSED',
+  'EPIPE',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_SOCKET'
+ ].includes(code)) {
+  return true;
+ }
+ const name = String(error?.name || '').toLowerCase();
+ if (name.includes('abort')) return true;
+ const message = String(error?.message || '').toLowerCase();
+ return (
+  message.includes('network') ||
+  message.includes('socket') ||
+  message.includes('timed out') ||
+  message.includes('econnreset') ||
+  message.includes('eai_again') ||
+  message.includes('fetch failed') ||
+  (message.includes('request to') && message.includes('failed'))
+ );
+}
+
+function getTelegramRetryDelayMs(attempt, retryAfterSeconds) {
+ const retryAfterMs = Number(retryAfterSeconds) * 1000;
+ if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+  return Math.min(Math.max(retryAfterMs, 500), TELEGRAM_API_RETRY_MAX_MS);
+ }
+ const jitterMs = Math.floor(Math.random() * 200);
+ const expDelay = TELEGRAM_API_RETRY_BASE_MS * (2 ** Math.max(0, Number(attempt) || 0));
+ return Math.min(expDelay + jitterMs, TELEGRAM_API_RETRY_MAX_MS);
+}
+
 async function telegramApi(method, payload = {}) {
  if (!process.env.TELEGRAM_BOT_TOKEN) {
   throw new Error('Telegram bot token not set');
  }
  const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/${method}`;
- const response = await fetch(url, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(payload)
- });
- const data = await response.json().catch(() => ({}));
- if (!response.ok || !data.ok) {
-  const message = data.description || data.error || response.statusText || 'Telegram API error';
-  throw new Error(message);
+ const attempts = Math.max(1, TELEGRAM_API_MAX_RETRIES + 1);
+ for (let attempt = 0; attempt < attempts; attempt += 1) {
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), TELEGRAM_API_TIMEOUT_MS);
+  let response;
+  try {
+   response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: controller.signal
+   });
+  } catch (error) {
+   const shouldRetry = attempt < attempts - 1 && isRetryableTelegramNetworkError(error);
+   if (shouldRetry) {
+    await sleep(getTelegramRetryDelayMs(attempt));
+    continue;
+   }
+   throw new Error(formatTelegramApiError(method, error?.message || error));
+  } finally {
+   clearTimeout(timeoutHandle);
+  }
+
+  const data = await response.json().catch(() => ({}));
+  if (response.ok && data.ok) {
+   return data.result;
+  }
+
+  const status = Number(response.status) || 0;
+  const errorCode = Number(data?.error_code) || 0;
+  const shouldRetry = attempt < attempts - 1 && (isRetryableTelegramStatus(status) || errorCode === 429);
+  if (shouldRetry) {
+   await sleep(getTelegramRetryDelayMs(attempt, data?.parameters?.retry_after));
+   continue;
+  }
+  const message = normalizeText(data?.description)
+   || normalizeText(data?.error)
+   || normalizeText(response.statusText)
+   || `Telegram API error (${status || 'unknown'})`;
+  throw new Error(formatTelegramApiError(method, message));
  }
- return data.result;
+ throw new Error(formatTelegramApiError(method, 'Telegram request failed after retries'));
 }
 
 async function downloadTelegramFile(fileId, nameHint) {

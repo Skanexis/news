@@ -311,7 +311,7 @@ test('buildRuntimePlan enforces configured same-post minimum gap', () => {
   runtimeEndTime: '13:00',
   minIntervalMinutes: 20,
   rotationGapMinutes: 0,
-  samePostMinGapMinutes: 90
+  samePostMinGapMinutes: 60
  }, {
   startFromNow: false,
   startCursor: 0
@@ -327,7 +327,7 @@ test('buildRuntimePlan enforces configured same-post minimum gap', () => {
  }
  for (const minutes of slotsByPost.values()) {
   for (let i = 1; i < minutes.length; i += 1) {
-   assert.ok(minutes[i] - minutes[i - 1] >= 90);
+   assert.ok(minutes[i] - minutes[i - 1] >= 60);
   }
  }
 });

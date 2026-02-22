@@ -38,6 +38,7 @@ const MAX_POST_BUTTONS = 8;
 const MAX_POST_BUTTON_TEXT_LENGTH = 64;
 const REGULAR_ROTATION_WEIGHT = 2;
 const PREMIUM_ROTATION_WEIGHT = 3;
+const DEFAULT_SAME_POST_MIN_GAP_MINUTES = parsePositiveInt(process.env.SAME_POST_MIN_GAP_MINUTES, 90, 1, 1440);
 const DEFAULT_LOGS_PAGE_SIZE = 50;
 const MAX_LOGS_PAGE_SIZE = 200;
 const ANALYTICS_CACHE_TTL_MS = parsePositiveInt(process.env.ANALYTICS_CACHE_TTL_MS, 30000, 1000, 3600000);
@@ -522,6 +523,7 @@ function getSchedulerSettings() {
  const runtimeEndTime = normalizeTime(getSetting('runtimeEndTime')) || '23:00';
  const minIntervalMinutes = Number(getSetting('minIntervalMinutes') || 20);
  const rotationGapMinutes = Number(getSetting('rotationGapMinutes') || 0);
+ const samePostMinGapMinutes = Number(getSetting('samePostMinGapMinutes') || DEFAULT_SAME_POST_MIN_GAP_MINUTES);
  const enabledRaw = getSetting('scheduleEnabled');
  const enabled = enabledRaw === null ? true : enabledRaw !== '0';
  return {
@@ -529,6 +531,9 @@ function getSchedulerSettings() {
   runtimeEndTime,
   minIntervalMinutes: Number.isFinite(minIntervalMinutes) && minIntervalMinutes > 0 ? Math.floor(minIntervalMinutes) : 20,
   rotationGapMinutes: Number.isFinite(rotationGapMinutes) && rotationGapMinutes >= 0 ? Math.floor(rotationGapMinutes) : 0,
+  samePostMinGapMinutes: Number.isFinite(samePostMinGapMinutes) && samePostMinGapMinutes > 0
+   ? Math.floor(samePostMinGapMinutes)
+   : DEFAULT_SAME_POST_MIN_GAP_MINUTES,
   enabled
  };
 }
@@ -941,6 +946,7 @@ function getCachedScheduleForecast(targetDate, config, options = {}) {
   config.runtimeEndTime,
   Number(config.minIntervalMinutes) || 0,
   Number(config.rotationGapMinutes) || 0,
+  Number(config.samePostMinGapMinutes) || 0,
   startFromNow ? 1 : 0,
   cursorToken
  ].join('|');
@@ -1312,6 +1318,10 @@ function getCyclicDistance(index, pointer, size) {
 function buildRuntimePlan(targetDate, posts, config, options = {}) {
  const minIntervalMinutes = Math.max(1, Number(config.minIntervalMinutes) || 1);
  const rotationGapMinutes = Math.max(0, Number(config.rotationGapMinutes) || 0);
+ const samePostMinGapMinutes = Math.max(
+  minIntervalMinutes,
+  Number(config.samePostMinGapMinutes) || minIntervalMinutes
+ );
  const windowStart = timeToMinutes(config.scheduleTime);
  const windowEnd = timeToMinutes(config.runtimeEndTime);
  const sortedPosts = [...posts].sort(compareCompanyPosts);
@@ -1409,8 +1419,9 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
  let currentMinutes = runtimeStartMinutes;
  const slots = [];
  const preferredReleased = new Set();
+ const lastScheduledMinuteByPost = new Map();
 
- const isRotatingPostBlockedByPreferredWindow = (candidate) => {
+ const isPostBlockedByPreferredWindow = (candidate) => {
   const preferredMinute = preferredMinuteByPost.get(candidate.id);
   const waitingPreferredWindow = preferredMinute !== undefined &&
    !preferredReleased.has(candidate.id) &&
@@ -1418,8 +1429,24 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
   return waitingPreferredWindow;
  };
 
+ const getPostCooldownReleaseMinute = (candidate) => {
+  const postId = Number(candidate?.id || 0);
+  if (!postId) return currentMinutes;
+  const lastScheduledMinute = lastScheduledMinuteByPost.get(postId);
+  if (!Number.isFinite(lastScheduledMinute)) return currentMinutes;
+  return lastScheduledMinute + samePostMinGapMinutes;
+ };
+
+ const isPostBlockedByCooldown = (candidate) => {
+  return getPostCooldownReleaseMinute(candidate) > currentMinutes;
+ };
+
+ const isPostUnavailableAtCurrentMinute = (candidate) => {
+  return isPostBlockedByPreferredWindow(candidate) || isPostBlockedByCooldown(candidate);
+ };
+
  const hasAvailableRotatingPostInCompany = (company) => {
-  return company.posts.some((post) => !isRotatingPostBlockedByPreferredWindow(post));
+  return company.posts.some((post) => !isPostUnavailableAtCurrentMinute(post));
  };
 
  const pickPostFromCompany = (company, lastPostId = null) => {
@@ -1429,7 +1456,7 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
   for (let shift = 0; shift < totalPosts; shift += 1) {
    const index = (company.postCursor + shift) % totalPosts;
    const candidate = company.posts[index];
-   if (isRotatingPostBlockedByPreferredWindow(candidate)) continue;
+   if (isPostUnavailableAtCurrentMinute(candidate)) continue;
    const nextCursor = (index + 1) % totalPosts;
    if (!fallback) fallback = { post: candidate, nextCursor };
    if (lastPostId && Number(candidate?.id || 0) === Number(lastPostId) && totalPosts > 1) {
@@ -1500,22 +1527,46 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
 
  const pickDuePreferredPostForCompany = (preferredCompany, duePreferredRows) => {
   if (!preferredCompany) return null;
-  const dueRow = duePreferredRows.find((row) => row.entry.companyKey === preferredCompany.key);
-  if (!dueRow) return null;
-  const selectedPost = dueRow.entry.post;
-  pendingPreferred.splice(dueRow.index, 1);
-  pointer = (preferredCompany.orderIndex + 1) % sequenceLength;
-  const preferredPostIndex = preferredCompany.posts.findIndex((item) => Number(item?.id || 0) === Number(selectedPost?.id || 0));
-  if (preferredPostIndex >= 0) {
-   preferredCompany.postCursor = (preferredPostIndex + 1) % preferredCompany.posts.length;
+  for (const dueRow of duePreferredRows) {
+   if (dueRow.entry.companyKey !== preferredCompany.key) continue;
+   const selectedPost = dueRow.entry.post;
+   if (isPostBlockedByCooldown(selectedPost)) continue;
+   pendingPreferred.splice(dueRow.index, 1);
+   pointer = (preferredCompany.orderIndex + 1) % sequenceLength;
+   const preferredPostIndex = preferredCompany.posts.findIndex((item) => Number(item?.id || 0) === Number(selectedPost?.id || 0));
+   if (preferredPostIndex >= 0) {
+    preferredCompany.postCursor = (preferredPostIndex + 1) % preferredCompany.posts.length;
+   }
+   return selectedPost;
   }
-  return selectedPost;
+  return null;
  };
 
  const getRotatingCompanyKeys = () => {
   return companies
    .filter((company) => hasAvailableRotatingPostInCompany(company))
    .map((company) => company.key);
+ };
+
+ const getNextAvailabilityMinute = () => {
+  let nextMinute = null;
+  for (const company of companies) {
+   for (const post of company.posts) {
+    let candidateMinute = currentMinutes;
+    const preferredMinute = preferredMinuteByPost.get(post.id);
+    if (preferredMinute !== undefined && !preferredReleased.has(post.id) && candidateMinute < preferredMinute) {
+     candidateMinute = preferredMinute;
+    }
+    candidateMinute = Math.max(candidateMinute, getPostCooldownReleaseMinute(post));
+    if (candidateMinute <= currentMinutes) {
+     return currentMinutes;
+    }
+    if (nextMinute === null || candidateMinute < nextMinute) {
+     nextMinute = candidateMinute;
+    }
+   }
+  }
+  return nextMinute;
  };
 
  while (currentMinutes <= windowEnd) {
@@ -1574,6 +1625,18 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
    }
   }
 
+  if (!post) {
+   const nextAvailabilityMinute = getNextAvailabilityMinute();
+   if (
+    Number.isFinite(nextAvailabilityMinute) &&
+    nextAvailabilityMinute > currentMinutes &&
+    nextAvailabilityMinute <= windowEnd
+   ) {
+    currentMinutes = nextAvailabilityMinute;
+    continue;
+   }
+  }
+
   if (!post) break;
   if (preferredMinuteByPost.has(post.id)) {
    preferredReleased.add(post.id);
@@ -1589,6 +1652,10 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
    source: usedPreferredOverride ? 'preferred' : 'rotation',
    rotationCursorAfter: pointer
   });
+  const scheduledPostId = Number(post?.id || 0);
+  if (scheduledPostId) {
+   lastScheduledMinuteByPost.set(scheduledPostId, currentMinutes);
+  }
   perPostCounts.set(post.id, (perPostCounts.get(post.id) || 0) + 1);
   currentMinutes += minIntervalMinutes;
   if (!usedPreferredOverride && pointer === 0) currentMinutes += rotationGapMinutes;
@@ -1649,6 +1716,7 @@ function calculateScheduleForecast(date, posts, config, options = {}) {
    runtimeEndTime: config.runtimeEndTime,
    minIntervalMinutes: config.minIntervalMinutes,
    rotationGapMinutes: config.rotationGapMinutes,
+   samePostMinGapMinutes: config.samePostMinGapMinutes,
    expectedPublications: plan.totalPublications,
    expectedFullRotations: plan.fullRotations
   }
@@ -1660,7 +1728,8 @@ function calculateScheduleForecast(date, posts, config, options = {}) {
    scheduleTime: config.scheduleTime,
    runtimeEndTime: config.runtimeEndTime,
    minIntervalMinutes: config.minIntervalMinutes,
-   rotationGapMinutes: config.rotationGapMinutes
+   rotationGapMinutes: config.rotationGapMinutes,
+   samePostMinGapMinutes: config.samePostMinGapMinutes
   },
   totals: {
    windowStartTime: minutesToTimeString(plan.windowStartMinutes) || config.scheduleTime,
@@ -2127,7 +2196,8 @@ app.get('/settings', (_, res) => {
   scheduleTime: settings.scheduleTime,
   runtimeEndTime: settings.runtimeEndTime,
   minIntervalMinutes: settings.minIntervalMinutes,
-  rotationGapMinutes: settings.rotationGapMinutes
+  rotationGapMinutes: settings.rotationGapMinutes,
+  samePostMinGapMinutes: settings.samePostMinGapMinutes
  });
 });
 
@@ -2148,6 +2218,10 @@ app.put('/settings', (req, res) => {
  const rotationGapMinutesRaw = hasNonEmptyValue(rotationGapInput)
   ? Number(rotationGapInput)
   : currentSettings.rotationGapMinutes;
+ const samePostMinGapInput = req.body?.samePostMinGapMinutes;
+ const samePostMinGapMinutesRaw = hasNonEmptyValue(samePostMinGapInput)
+  ? Number(samePostMinGapInput)
+  : currentSettings.samePostMinGapMinutes;
 
  if (scheduleTime === null) return badRequest(res, 'Invalid schedule time');
  if (runtimeEndTime === null) return badRequest(res, 'Invalid runtime end time');
@@ -2162,12 +2236,16 @@ app.put('/settings', (req, res) => {
  if (!Number.isFinite(rotationGapMinutesRaw) || rotationGapMinutesRaw < 0) {
   return badRequest(res, 'Invalid rotation gap');
  }
+ if (!Number.isFinite(samePostMinGapMinutesRaw) || samePostMinGapMinutesRaw < 1) {
+  return badRequest(res, 'Invalid same post min gap');
+ }
 
  setSetting('scheduleEnabled', scheduleEnabled === 0 || scheduleEnabled === false || scheduleEnabled === '0' ? '0' : '1');
  setSetting('scheduleTime', scheduleTime);
  setSetting('runtimeEndTime', runtimeEndTime);
  setSetting('minIntervalMinutes', String(Math.floor(minIntervalMinutesRaw)));
  setSetting('rotationGapMinutes', String(Math.floor(rotationGapMinutesRaw)));
+ setSetting('samePostMinGapMinutes', String(Math.floor(samePostMinGapMinutesRaw)));
  invalidateDerivedCaches({ analytics: false });
 
  configureScheduleJob();
@@ -2479,18 +2557,21 @@ app.get('/schedule/forecast', (req, res) => {
  const endTimeRaw = req.query?.endTime;
  const minIntervalRaw = req.query?.minIntervalMinutes;
  const rotationGapRaw = req.query?.rotationGapMinutes;
+ const samePostMinGapRaw = req.query?.samePostMinGapMinutes;
  const startFromNowRaw = req.query?.startFromNow;
 
  const hasStartTime = hasNonEmptyValue(startTimeRaw);
  const hasEndTime = hasNonEmptyValue(endTimeRaw);
  const hasMinInterval = hasNonEmptyValue(minIntervalRaw);
  const hasRotationGap = hasNonEmptyValue(rotationGapRaw);
+ const hasSamePostMinGap = hasNonEmptyValue(samePostMinGapRaw);
  const startFromNow = startFromNowRaw === '1' || startFromNowRaw === 1 || startFromNowRaw === true || startFromNowRaw === 'true';
 
  const scheduleTime = hasStartTime ? normalizeTime(startTimeRaw) : settings.scheduleTime;
  const runtimeEndTime = hasEndTime ? normalizeTime(endTimeRaw) : settings.runtimeEndTime;
  const minIntervalMinutes = hasMinInterval ? Number(minIntervalRaw) : settings.minIntervalMinutes;
  const rotationGapMinutes = hasRotationGap ? Number(rotationGapRaw) : settings.rotationGapMinutes;
+ const samePostMinGapMinutes = hasSamePostMinGap ? Number(samePostMinGapRaw) : settings.samePostMinGapMinutes;
 
  if (hasStartTime && scheduleTime === null) return badRequest(res, 'Invalid start time');
  if (hasEndTime && runtimeEndTime === null) return badRequest(res, 'Invalid end time');
@@ -2500,6 +2581,9 @@ app.get('/schedule/forecast', (req, res) => {
  if (!Number.isFinite(rotationGapMinutes) || rotationGapMinutes < 0) {
   return badRequest(res, 'Invalid rotation gap');
  }
+ if (!Number.isFinite(samePostMinGapMinutes) || samePostMinGapMinutes < 1) {
+  return badRequest(res, 'Invalid same post min gap');
+ }
 
  const scheduleStartMinutes = timeToMinutes(scheduleTime);
  const scheduleEndMinutes = timeToMinutes(runtimeEndTime);
@@ -2507,12 +2591,13 @@ app.get('/schedule/forecast', (req, res) => {
   return badRequest(res, 'Runtime end time must be after start time');
  }
 
-const forecastConfig = {
- scheduleTime,
- runtimeEndTime,
- minIntervalMinutes: Math.floor(minIntervalMinutes),
- rotationGapMinutes: Math.floor(rotationGapMinutes)
-};
+ const forecastConfig = {
+  scheduleTime,
+  runtimeEndTime,
+  minIntervalMinutes: Math.floor(minIntervalMinutes),
+  rotationGapMinutes: Math.floor(rotationGapMinutes),
+  samePostMinGapMinutes: Math.floor(samePostMinGapMinutes)
+ };
  res.send(getCachedScheduleForecast(targetDate, forecastConfig, { startFromNow }));
 });
 

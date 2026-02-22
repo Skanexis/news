@@ -300,6 +300,38 @@ test('buildRuntimePlan still schedules when only one company is available', () =
  assert.equal(allSameCompany, true);
 });
 
+test('buildRuntimePlan enforces configured same-post minimum gap', () => {
+ const today = getCurrentDateString();
+ const posts = [
+  { id: 801, companyId: 1, companyName: 'Alpha', companyPremium: 0, preferredTime: null },
+  { id: 802, companyId: 2, companyName: 'Beta', companyPremium: 0, preferredTime: null }
+ ];
+ const plan = buildRuntimePlan(today, posts, {
+  scheduleTime: '09:00',
+  runtimeEndTime: '13:00',
+  minIntervalMinutes: 20,
+  rotationGapMinutes: 0,
+  samePostMinGapMinutes: 90
+ }, {
+  startFromNow: false,
+  startCursor: 0
+ });
+
+ const slotsByPost = new Map();
+ for (const slot of plan.slots) {
+  const postId = Number(slot.post.id);
+  if (!slotsByPost.has(postId)) {
+   slotsByPost.set(postId, []);
+  }
+  slotsByPost.get(postId).push(slot.minutes);
+ }
+ for (const minutes of slotsByPost.values()) {
+  for (let i = 1; i < minutes.length; i += 1) {
+   assert.ok(minutes[i] - minutes[i - 1] >= 90);
+  }
+ }
+});
+
 test('buildRuntimePlan prioritizes under-served regular company when historical gap is large', () => {
  const today = getCurrentDateString();
  for (let i = 0; i < 40; i += 1) {

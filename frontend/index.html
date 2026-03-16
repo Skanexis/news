@@ -2245,7 +2245,7 @@
             <button class="btn primary" id="saveSettingsBtn">Salva Impostazioni</button>
             <button class="btn ghost" id="saveRunNowBtn" type="button">Salva + Avvia Oggi</button>
           </div>
-          <p class="hint">Ogni sessione invia tutti i post attivi. Intervallo configurabile in minuti; nel forecast vedi l'ora stimata di fine.</p>
+          <p class="hint">Ogni sessione invia tutti i post attivi. Con "Salva Impostazioni" il nuovo orario parte da domani; usa "Salva + Avvia Oggi" per partire subito.</p>
           <div id="schedulerForecast" class="scheduler-forecast"></div>
         </div>
 
@@ -4007,7 +4007,10 @@
       params.set('date', state.scheduleDate);
       if (useFormValues) {
         params.set('startTime', String(els.scheduleTime.value || '').trim());
-        params.set('secondStartTime', String(els.secondScheduleTime.value || '').trim());
+        const secondStartValue = String(els.secondScheduleTime.value || '').trim();
+        if (secondStartValue) {
+          params.set('secondStartTime', secondStartValue);
+        }
         const minIntervalValue = String(els.minIntervalMinutes.value || '').trim();
         if (minIntervalValue) {
           params.set('minIntervalMinutes', minIntervalValue);
@@ -4426,6 +4429,11 @@
       const config = data.config || {};
       const sessions = Array.isArray(data.sessions) ? data.sessions : [];
       const perPost = Array.isArray(data.perPost) ? data.perPost : [];
+      const firstSession = sessions.find((session) => Number(session?.sessionIndex || 0) === 1) || sessions[0] || null;
+      const firstSessionEndTime = totals.firstSessionEndTime
+        || firstSession?.endLabel
+        || firstSession?.endTime
+        || '-';
 
       const sortedPerPost = [...perPost].sort((a, b) => {
         const byCount = Number(b?.publishCount || 0) - Number(a?.publishCount || 0);
@@ -4482,6 +4490,10 @@
           <div class="forecast-item">
             <span>Secondo Avvio</span>
             <strong>${escapeHtml(String(config.secondScheduleTime || '-'))}</strong>
+          </div>
+          <div class="forecast-item">
+            <span>Fine 1 Ciclo</span>
+            <strong>${escapeHtml(String(firstSessionEndTime || '-'))}</strong>
           </div>
           <div class="forecast-item">
             <span>Post Attivi</span>
@@ -5298,10 +5310,11 @@
           setStatus('Intervallo non valido (1-1440 minuti).', 'error');
           return;
         }
+        const secondScheduleTime = String(els.secondScheduleTime.value || '').trim();
         const payload = {
           scheduleEnabled: els.scheduleEnabled.checked ? 1 : 0,
           scheduleTime: els.scheduleTime.value,
-          secondScheduleTime: els.secondScheduleTime.value,
+          secondScheduleTime: secondScheduleTime || null,
           minIntervalMinutes,
           runNow: runNow ? 1 : 0,
           runDate: getTodayDateKey()

@@ -37,7 +37,6 @@ const allowedPlatforms = new Set(['telegram']);
 const MAX_POST_BUTTONS = 8;
 const MAX_POST_BUTTON_TEXT_LENGTH = 64;
 const DEFAULT_BROADCAST_INTERVAL_MINUTES = parsePositiveInt(process.env.MIN_INTERVAL_MINUTES, 5, 1, 1440);
-const DEFAULT_SECOND_SCHEDULE_TIME = '18:00';
 const DEFAULT_LOGS_PAGE_SIZE = 50;
 const MAX_LOGS_PAGE_SIZE = 200;
 const ANALYTICS_CACHE_TTL_MS = parsePositiveInt(process.env.ANALYTICS_CACHE_TTL_MS, 30000, 1000, 3600000);
@@ -517,19 +516,22 @@ function getPrimarySchedulerDefault() {
 
 function getSecondarySchedulerDefault(primaryStartTime) {
  const envValue = normalizeTime(process.env.SECOND_SCHEDULE_TIME);
- if (envValue && envValue !== primaryStartTime) return envValue;
- if (DEFAULT_SECOND_SCHEDULE_TIME !== primaryStartTime) return DEFAULT_SECOND_SCHEDULE_TIME;
- const primaryMinutes = timeToMinutes(primaryStartTime);
- if (primaryMinutes === null) return '18:00';
- return minutesToTimeString(primaryMinutes + 60) || '18:00';
+ if (!envValue) return null;
+ if (envValue === primaryStartTime) return null;
+ return envValue;
 }
 
 function getSchedulerSettings() {
  const scheduleTime = normalizeTime(getSetting('scheduleTime')) || getPrimarySchedulerDefault();
- const secondFromSetting = normalizeTime(getSetting('secondScheduleTime'));
- const secondScheduleTime = (secondFromSetting && secondFromSetting !== scheduleTime)
-  ? secondFromSetting
-  : getSecondarySchedulerDefault(scheduleTime);
+ const rawSecondFromSetting = getSetting('secondScheduleTime');
+ let secondScheduleTime = null;
+ if (rawSecondFromSetting === null) {
+  secondScheduleTime = getSecondarySchedulerDefault(scheduleTime);
+ } else if (hasNonEmptyValue(rawSecondFromSetting)) {
+  secondScheduleTime = normalizeTime(rawSecondFromSetting);
+ } else {
+  secondScheduleTime = null;
+ }
  const minIntervalRaw = Number(getSetting('minIntervalMinutes'));
  const minIntervalMinutes = Number.isFinite(minIntervalRaw) && minIntervalRaw > 0
   ? Math.floor(minIntervalRaw)
@@ -1419,6 +1421,9 @@ function calculateScheduleForecast(date, posts, config, options = {}) {
   overflowSkipped: session.overflowSkipped,
   mode: session.mode
  }));
+ const firstSession = sessionSummaries.find((session) => Number(session?.sessionIndex || 0) === 1)
+  || sessionSummaries[0]
+  || null;
 
  return {
   date,
@@ -1432,6 +1437,8 @@ function calculateScheduleForecast(date, posts, config, options = {}) {
    totalPublications: plan.totalPublications,
    intervalMinutes: plan.intervalMinutes,
    sessions: sessionSummaries.length,
+   firstSessionEndTime: firstSession?.endLabel || firstSession?.endTime || null,
+   firstSessionPublications: Number(firstSession?.plannedPublications || 0),
    estimatedEndTime: formatPlanMinuteLabel(plan.estimatedEndMinutes)
   },
   sessions: sessionSummaries,
@@ -1694,28 +1701,15 @@ function configureScheduleJob() {
   const [hh, mm] = session.configuredTime.split(':').map(Number);
   const cronExpr = `${mm} ${hh} * * *`;
   const job = cron.schedule(cronExpr, async () => {
+   const activationDate = getSetting('scheduleActivationDate');
+   const today = getCurrentDateString();
+   if (isValidDateString(activationDate) && today < activationDate) {
+    return;
+   }
    generateDailySchedule(undefined, true);
    processDueSchedule(true).catch((e) => console.log('Session run failed:', e.message));
   }, CRON_TZ ? { timezone: CRON_TZ } : undefined);
   scheduleJobs.push(job);
- }
-}
-
-function ensureTodaySchedule() {
- const settings = getSchedulerSettings();
- if (!settings.enabled) return;
- const sessionStarts = getSessionStartRows(settings);
- if (!sessionStarts.length) return;
- const today = getCurrentDateString();
- const dayStart = `${today}T00:00:00`;
- const dayEnd = `${today}T23:59:59.999`;
- const existing = db.prepare('SELECT COUNT(*) as count FROM schedule_items WHERE scheduledAt >= ? AND scheduledAt <= ?')
-  .get(dayStart, dayEnd)?.count || 0;
- if (existing > 0) return;
- const scheduleMinutes = sessionStarts[0].configuredMinutes;
- const nowMinutes = getCurrentMinutes();
- if (nowMinutes >= scheduleMinutes) {
-  generateDailySchedule(today, true);
  }
 }
 
@@ -1897,11 +1891,13 @@ app.get('/runtime/time', (_, res) => res.send({
 
 app.get('/settings', (_, res) => {
  const settings = getSchedulerSettings();
+ const scheduleActivationDate = getSetting('scheduleActivationDate');
  res.send({
   scheduleEnabled: settings.enabled ? 1 : 0,
   scheduleTime: settings.scheduleTime,
   secondScheduleTime: settings.secondScheduleTime,
-  minIntervalMinutes: settings.minIntervalMinutes
+  minIntervalMinutes: settings.minIntervalMinutes,
+  scheduleActivationDate: isValidDateString(scheduleActivationDate) ? scheduleActivationDate : null
  });
 });
 
@@ -1918,16 +1914,22 @@ app.put('/settings', (req, res) => {
  const scheduleTime = hasNonEmptyValue(scheduleTimeInput)
   ? normalizeTime(scheduleTimeInput)
   : currentSettings.scheduleTime;
- const secondScheduleTime = hasNonEmptyValue(secondScheduleTimeInput)
-  ? normalizeTime(secondScheduleTimeInput)
-  : currentSettings.secondScheduleTime;
+ const hasSecondScheduleTimeInput = secondScheduleTimeInput !== undefined && secondScheduleTimeInput !== null;
+ let secondScheduleTime = currentSettings.secondScheduleTime;
+ if (hasSecondScheduleTimeInput) {
+  secondScheduleTime = hasNonEmptyValue(secondScheduleTimeInput)
+   ? normalizeTime(secondScheduleTimeInput)
+   : null;
+ }
  const minIntervalMinutes = hasNonEmptyValue(minIntervalInput)
   ? Number(minIntervalInput)
   : currentSettings.minIntervalMinutes;
 
  if (!scheduleTime) return badRequest(res, 'Invalid first start time');
- if (!secondScheduleTime) return badRequest(res, 'Invalid second start time');
- if (scheduleTime === secondScheduleTime) {
+ if (hasSecondScheduleTimeInput && hasNonEmptyValue(secondScheduleTimeInput) && !secondScheduleTime) {
+  return badRequest(res, 'Invalid second start time');
+ }
+ if (secondScheduleTime && scheduleTime === secondScheduleTime) {
   return badRequest(res, 'First and second start time must be different');
  }
  if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 1 || minIntervalMinutes > 1440) {
@@ -1936,8 +1938,24 @@ app.put('/settings', (req, res) => {
 
  setSetting('scheduleEnabled', scheduleEnabled === 0 || scheduleEnabled === false || scheduleEnabled === '0' ? '0' : '1');
  setSetting('scheduleTime', scheduleTime);
- setSetting('secondScheduleTime', secondScheduleTime);
+ setSetting('secondScheduleTime', secondScheduleTime || '');
  setSetting('minIntervalMinutes', String(Math.floor(minIntervalMinutes)));
+ if (!runNow) {
+  const tomorrow = addDaysToDateString(getCurrentDateString(), 1);
+  if (tomorrow) {
+   setSetting('scheduleActivationDate', tomorrow);
+  }
+  const nowIso = nowLocalIso();
+  const todayEnd = `${getCurrentDateString()}T23:59:59.999`;
+  db.prepare(`
+   DELETE FROM schedule_items
+   WHERE status = 'pending'
+    AND scheduledAt >= ?
+    AND scheduledAt <= ?
+  `).run(nowIso, todayEnd);
+ } else {
+  setSetting('scheduleActivationDate', runDate);
+ }
  invalidateDerivedCaches({ analytics: false });
 
  configureScheduleJob();
@@ -2255,6 +2273,7 @@ app.get('/schedule/forecast', (req, res) => {
  const forceImmediateRaw = req.query?.forceImmediateSession;
 
  const hasStartTime = hasNonEmptyValue(startTimeRaw);
+ const hasSecondStartTimeInput = secondStartTimeRaw !== undefined && secondStartTimeRaw !== null;
  const hasSecondStartTime = hasNonEmptyValue(secondStartTimeRaw);
  const hasMinInterval = hasNonEmptyValue(minIntervalRaw);
  const startFromNow = startFromNowRaw === '1' || startFromNowRaw === 1 || startFromNowRaw === true || startFromNowRaw === 'true';
@@ -2264,12 +2283,19 @@ app.get('/schedule/forecast', (req, res) => {
   || forceImmediateRaw === 'true';
 
  const scheduleTime = hasStartTime ? normalizeTime(startTimeRaw) : settings.scheduleTime;
- const secondScheduleTime = hasSecondStartTime ? normalizeTime(secondStartTimeRaw) : settings.secondScheduleTime;
+ let secondScheduleTime = settings.secondScheduleTime;
+ if (hasSecondStartTimeInput) {
+  secondScheduleTime = hasSecondStartTime ? normalizeTime(secondStartTimeRaw) : null;
+ }
  const minIntervalMinutes = hasMinInterval ? Number(minIntervalRaw) : settings.minIntervalMinutes;
 
  if (!scheduleTime) return badRequest(res, 'Invalid first start time');
- if (!secondScheduleTime) return badRequest(res, 'Invalid second start time');
- if (scheduleTime === secondScheduleTime) return badRequest(res, 'First and second start time must be different');
+ if (hasSecondStartTimeInput && hasSecondStartTime && !secondScheduleTime) {
+  return badRequest(res, 'Invalid second start time');
+ }
+ if (secondScheduleTime && scheduleTime === secondScheduleTime) {
+  return badRequest(res, 'First and second start time must be different');
+ }
  if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 1 || minIntervalMinutes > 1440) {
   return badRequest(res, 'Invalid interval minutes');
  }
@@ -2469,7 +2495,6 @@ let httpServer = null;
 function startRuntimeWorkers() {
  if (runtimeTickHandle) return;
  configureScheduleJob();
- ensureTodaySchedule();
  runtimeTickHandle = setInterval(() => {
   processDueSchedule().catch((e) => console.log('Schedule tick failed:', e.message));
  }, 30000);

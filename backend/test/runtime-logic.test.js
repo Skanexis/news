@@ -287,6 +287,26 @@ test('buildRuntimePlan respects custom interval from settings', () => {
  assert.deepEqual(firstSessionMinutes, [540, 552, 564]);
 });
 
+test('buildRuntimePlan works with only first session configured', () => {
+ const today = getCurrentDateString();
+ const posts = [
+  { id: 1001, companyId: 1, companyName: 'A' },
+  { id: 1002, companyId: 2, companyName: 'B' },
+  { id: 1003, companyId: 3, companyName: 'C' }
+ ];
+ const plan = buildRuntimePlan(today, posts, {
+  scheduleTime: '09:00',
+  secondScheduleTime: null,
+  minIntervalMinutes: 5
+ }, {
+  startFromNow: false
+ });
+ assert.equal(plan.sessions.length, 1);
+ assert.equal(plan.totalPublications, 3);
+ const onlySessionIds = plan.slots.map((slot) => Number(slot.post?.id || 0));
+ assert.equal(new Set(onlySessionIds).size, posts.length);
+});
+
 test('buildRuntimePlan keeps deterministic shuffle for same date/config', () => {
  const today = getCurrentDateString();
  const posts = [

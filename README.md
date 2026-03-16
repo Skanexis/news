@@ -32,10 +32,10 @@ Le bozze acquisite appaiono nel blocco **Bozze Telegram** e possono essere colle
 
 ## Impostazioni pianificazione (UI admin)
 - Primo avvio automatico: inizio della prima sessione giornaliera.
-- Secondo avvio automatico: inizio della seconda sessione giornaliera.
+- Secondo avvio automatico (opzionale): inizio della seconda sessione giornaliera.
 - Intervallo invio configurabile in minuti (es. 5, 10, 15) tra i post.
 - Ogni sessione prova a inviare tutti i post attivi del giorno.
-- Nel blocco forecast viene mostrata l'ora stimata di fine in base al numero di post pianificati.
+- Nel blocco forecast viene mostrata anche la fine stimata del primo ciclo.
 
 ## Analitiche link
 - Attiva il tracciamento link nel form del post.
@@ -47,6 +47,7 @@ Le bozze acquisite appaiono nel blocco **Bozze Telegram** e possono essere colle
 - Usa **Pubblica** per inviare un post subito.
 - Usa **Esegui Pianificazione** per generare la pianificazione del giorno su richiesta.
 - L'avvio automatico genera/aggiorna la pianificazione ai due orari configurati.
+- Con **Salva Impostazioni** le nuove pianificazioni partono dal giorno successivo; con **Salva + Avvia Oggi** partono subito.
 - Le azioni manuali vengono registrate con `trigger = manual`.
 
 ## Variabili ambiente (.env)

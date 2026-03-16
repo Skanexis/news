@@ -2230,26 +2230,22 @@
               </div>
             </label>
             <label class="field span-6">
-              <span>Ora fine runtime</span>
+              <span>Secondo avvio</span>
               <div class="time-shell">
-                <input type="text" id="runtimeEndTime" class="time-input" placeholder="HH:MM" autocomplete="off" inputmode="numeric">
+                <input type="text" id="secondScheduleTime" class="time-input" placeholder="HH:MM" autocomplete="off" inputmode="numeric">
                 <button class="time-trigger" type="button" aria-label="Apri selettore orario"></button>
               </div>
             </label>
             <label class="field span-6">
-              <span>Intervallo minimo (min)</span>
-              <input type="number" id="minIntervalMinutes" min="1" step="1">
-            </label>
-            <label class="field span-6">
-              <span>Intervallo tra rotazioni (min)</span>
-              <input type="number" id="rotationGapMinutes" min="0" step="1">
+              <span>Intervallo invio (min)</span>
+              <input type="number" id="minIntervalMinutes" min="1" max="1440" step="1" value="5">
             </label>
           </div>
           <div class="row">
             <button class="btn primary" id="saveSettingsBtn">Salva Impostazioni</button>
             <button class="btn ghost" id="saveRunNowBtn" type="button">Salva + Avvia Oggi</button>
           </div>
-          <p class="hint">Quando termina una rotazione completa, il sistema applica l'intervallo extra prima di iniziare la successiva.</p>
+          <p class="hint">Ogni sessione invia tutti i post attivi. Intervallo configurabile in minuti; nel forecast vedi l'ora stimata di fine.</p>
           <div id="schedulerForecast" class="scheduler-forecast"></div>
         </div>
 
@@ -2804,9 +2800,8 @@
       scheduleEnabled: byId('scheduleEnabled'),
       scheduleEnabledLabel: byId('scheduleEnabledLabel'),
       scheduleTime: byId('scheduleTime'),
-      runtimeEndTime: byId('runtimeEndTime'),
+      secondScheduleTime: byId('secondScheduleTime'),
       minIntervalMinutes: byId('minIntervalMinutes'),
-      rotationGapMinutes: byId('rotationGapMinutes'),
       saveSettingsBtn: byId('saveSettingsBtn'),
       saveRunNowBtn: byId('saveRunNowBtn'),
       schedulerForecast: byId('schedulerForecast'),
@@ -4012,9 +4007,11 @@
       params.set('date', state.scheduleDate);
       if (useFormValues) {
         params.set('startTime', String(els.scheduleTime.value || '').trim());
-        params.set('endTime', String(els.runtimeEndTime.value || '').trim());
-        params.set('minIntervalMinutes', String(Number(els.minIntervalMinutes.value || 0)));
-        params.set('rotationGapMinutes', String(Number(els.rotationGapMinutes.value || 0)));
+        params.set('secondStartTime', String(els.secondScheduleTime.value || '').trim());
+        const minIntervalValue = String(els.minIntervalMinutes.value || '').trim();
+        if (minIntervalValue) {
+          params.set('minIntervalMinutes', minIntervalValue);
+        }
       }
       return `/schedule/forecast?${params.toString()}`;
     }
@@ -4409,9 +4406,8 @@
       els.scheduleEnabled.checked = Boolean(Number(state.settings.scheduleEnabled));
       els.scheduleEnabledLabel.textContent = els.scheduleEnabled.checked ? 'Attivo' : 'Disattivo';
       els.scheduleTime.value = state.settings.scheduleTime || '';
-      els.runtimeEndTime.value = state.settings.runtimeEndTime || '';
-      els.minIntervalMinutes.value = state.settings.minIntervalMinutes || 20;
-      els.rotationGapMinutes.value = state.settings.rotationGapMinutes || 0;
+      els.secondScheduleTime.value = state.settings.secondScheduleTime || '';
+      els.minIntervalMinutes.value = state.settings.minIntervalMinutes || 5;
     }
 
     function renderSchedulerForecast() {
@@ -4428,26 +4424,8 @@
 
       const totals = data.totals || {};
       const config = data.config || {};
+      const sessions = Array.isArray(data.sessions) ? data.sessions : [];
       const perPost = Array.isArray(data.perPost) ? data.perPost : [];
-      const distribution = Array.isArray(data.publishDistribution) ? data.publishDistribution : [];
-      const suggestions = data.suggestions || {};
-
-      const distributionText = distribution.length
-        ? distribution.map((row) => `${row.postCount} post x ${row.publishCount} invii`).join(' • ')
-        : 'Nessun invio nel runtime corrente.';
-
-      const suggestionOverall = suggestions.overall
-        ? `${suggestions.overall.scheduleTime} → ${suggestions.overall.runtimeEndTime}, intervallo ${suggestions.overall.minIntervalMinutes}m, pausa rotazione ${suggestions.overall.rotationGapMinutes}m (${suggestions.overall.expectedPublications} invii, ${suggestions.overall.expectedFullRotations} rotazioni complete)`
-        : 'Nessuna combinazione ottimale trovata con i parametri correnti.';
-      const suggestionInterval = suggestions.interval
-        ? `${suggestions.interval.minIntervalMinutes} min (${suggestions.interval.expectedPublications} invii, ${suggestions.interval.expectedFullRotations} rotazioni complete)`
-        : 'Nessun intervallo che distribuisce in modo perfettamente uniforme.';
-      const suggestionEnd = suggestions.endTime
-        ? `${suggestions.endTime.runtimeEndTime} (${suggestions.endTime.expectedPublications} invii, ${suggestions.endTime.expectedFullRotations} rotazioni complete)`
-        : 'Nessun orario fine valido per rotazioni complete.';
-      const suggestionStart = suggestions.startTime
-        ? `${suggestions.startTime.scheduleTime} (${suggestions.startTime.expectedPublications} invii, ${suggestions.startTime.expectedFullRotations} rotazioni complete)`
-        : 'Nessun orario avvio valido per rotazioni complete.';
 
       const sortedPerPost = [...perPost].sort((a, b) => {
         const byCount = Number(b?.publishCount || 0) - Number(a?.publishCount || 0);
@@ -4475,48 +4453,71 @@
         </tr>
       `).join('') || '<tr><td colspan="2" class="muted">Nessun post attivo.</td></tr>';
 
+      const sessionRows = sessions.map((session) => {
+        const mode = String(session?.mode || 'scheduled');
+        let modeLabel = 'Programmato';
+        if (mode === 'immediate') modeLabel = 'Avvio immediato';
+        if (mode === 'skipped_past') modeLabel = 'Saltato (orario passato)';
+        return `
+          <tr>
+            <td>#${escapeHtml(String(session?.sessionIndex || '-'))}</td>
+            <td>${escapeHtml(String(session?.startTime || session?.configuredStartTime || '-'))}</td>
+            <td>${escapeHtml(String(session?.endLabel || session?.endTime || '-'))}</td>
+            <td>${escapeHtml(String(session?.plannedPublications || 0))}</td>
+            <td>${escapeHtml(modeLabel)}</td>
+          </tr>
+        `;
+      }).join('') || '<tr><td colspan="5" class="muted">Nessuna sessione configurata.</td></tr>';
+
       els.schedulerForecast.innerHTML = `
         <div class="forecast-head">
-          <strong>Previsione runtime</strong>
+          <strong>Previsione Invii</strong>
           <span class="muted">${escapeHtml(String(data.date || '-'))}</span>
         </div>
         <div class="forecast-grid">
           <div class="forecast-item">
-            <span>Finestra</span>
-            <strong>${escapeHtml(`${totals.windowStartTime || '-'} → ${totals.windowEndTime || '-'}`)}</strong>
+            <span>Primo Avvio</span>
+            <strong>${escapeHtml(String(config.scheduleTime || '-'))}</strong>
+          </div>
+          <div class="forecast-item">
+            <span>Secondo Avvio</span>
+            <strong>${escapeHtml(String(config.secondScheduleTime || '-'))}</strong>
           </div>
           <div class="forecast-item">
             <span>Post Attivi</span>
             <strong>${escapeHtml(String(totals.activePosts || 0))}</strong>
           </div>
           <div class="forecast-item">
-            <span>Pubblicazioni Totali</span>
+            <span>Intervallo</span>
+            <strong>${escapeHtml(String(totals.intervalMinutes || config.minIntervalMinutes || 5))} min</strong>
+          </div>
+          <div class="forecast-item">
+            <span>Pubblicazioni Giornaliere</span>
             <strong>${escapeHtml(String(totals.totalPublications || 0))}</strong>
           </div>
           <div class="forecast-item">
-            <span>Rotazioni Complete</span>
-            <strong>${escapeHtml(String(totals.fullRotations || 0))}</strong>
-          </div>
-          <div class="forecast-item">
-            <span>Parziali Ultima Rotazione</span>
-            <strong>${escapeHtml(String(totals.partialPublications || 0))}</strong>
-          </div>
-          <div class="forecast-item">
-            <span>Distribuzione Uniforme</span>
-            <strong>${totals.equalRotations ? 'SI' : 'NO'}</strong>
+            <span>Fine Stimata</span>
+            <strong>${escapeHtml(String(totals.estimatedEndTime || '-'))}</strong>
           </div>
         </div>
-        <div class="forecast-block">
-          <h4 class="forecast-block-title">Distribuzione Per Numero Invii</h4>
-          <div class="forecast-text">${escapeHtml(distributionText)}</div>
-          <div class="forecast-text">Intervallo: ${escapeHtml(String(config.minIntervalMinutes || 0))} min, pausa rotazione: ${escapeHtml(String(config.rotationGapMinutes || 0))} min.</div>
-        </div>
-        <div class="forecast-block">
-          <h4 class="forecast-block-title">Suggerimenti Automatici</h4>
-          <div class="forecast-text">Combinazione completa: ${escapeHtml(suggestionOverall)}</div>
-          <div class="forecast-text">Solo intervallo: ${escapeHtml(suggestionInterval)}</div>
-          <div class="forecast-text">Solo fine runtime: ${escapeHtml(suggestionEnd)}</div>
-          <div class="forecast-text">Solo avvio runtime: ${escapeHtml(suggestionStart)}</div>
+        <div class="forecast-block forecast-table">
+          <div class="forecast-table-head">
+            <h4 class="forecast-block-title">Sessioni Programmate</h4>
+          </div>
+          <div class="table-wrap forecast-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Sessione</th>
+                  <th>Avvio</th>
+                  <th>Fine</th>
+                  <th>Post</th>
+                  <th>Stato</th>
+                </tr>
+              </thead>
+              <tbody>${sessionRows}</tbody>
+            </table>
+          </div>
         </div>
         <div class="forecast-block forecast-table">
           <div class="forecast-table-head">
@@ -5292,12 +5293,16 @@
         if (runNow) {
           await syncRuntimeDate();
         }
+        const minIntervalMinutes = Number(els.minIntervalMinutes.value || 0);
+        if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 1 || minIntervalMinutes > 1440) {
+          setStatus('Intervallo non valido (1-1440 minuti).', 'error');
+          return;
+        }
         const payload = {
           scheduleEnabled: els.scheduleEnabled.checked ? 1 : 0,
           scheduleTime: els.scheduleTime.value,
-          runtimeEndTime: els.runtimeEndTime.value,
-          minIntervalMinutes: Number(els.minIntervalMinutes.value || 0),
-          rotationGapMinutes: Number(els.rotationGapMinutes.value || 0),
+          secondScheduleTime: els.secondScheduleTime.value,
+          minIntervalMinutes,
           runNow: runNow ? 1 : 0,
           runDate: getTodayDateKey()
         };
@@ -5825,9 +5830,8 @@
 
     [
       els.scheduleTime,
-      els.runtimeEndTime,
-      els.minIntervalMinutes,
-      els.rotationGapMinutes
+      els.secondScheduleTime,
+      els.minIntervalMinutes
     ].forEach((el) => {
       if (!el) return;
       el.addEventListener('change', scheduleForecastPreview);

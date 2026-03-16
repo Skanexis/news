@@ -36,9 +36,8 @@ if (!fs.existsSync(uploadsDir)) {
 const allowedPlatforms = new Set(['telegram']);
 const MAX_POST_BUTTONS = 8;
 const MAX_POST_BUTTON_TEXT_LENGTH = 64;
-const REGULAR_ROTATION_WEIGHT = 2;
-const PREMIUM_ROTATION_WEIGHT = 3;
-const DEFAULT_SAME_POST_MIN_GAP_MINUTES = parsePositiveInt(process.env.SAME_POST_MIN_GAP_MINUTES, 60, 1, 1440);
+const DEFAULT_BROADCAST_INTERVAL_MINUTES = parsePositiveInt(process.env.MIN_INTERVAL_MINUTES, 5, 1, 1440);
+const DEFAULT_SECOND_SCHEDULE_TIME = '18:00';
 const DEFAULT_LOGS_PAGE_SIZE = 50;
 const MAX_LOGS_PAGE_SIZE = 200;
 const ANALYTICS_CACHE_TTL_MS = parsePositiveInt(process.env.ANALYTICS_CACHE_TTL_MS, 30000, 1000, 3600000);
@@ -506,9 +505,7 @@ function nowLocalIso() {
  return `${now.year}-${pad(now.month)}-${pad(now.day)}T${pad(now.hour)}:${pad(now.minute)}:${pad(now.second)}`;
 }
 
-function getSchedulerDefaults() {
- const fromSetting = normalizeTime(getSetting('scheduleTime'));
- if (fromSetting) return fromSetting;
+function getPrimarySchedulerDefault() {
  const cronMatch = String(CRON_TIME || '').match(/^(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+\*$/);
  if (cronMatch) {
   const mm = String(cronMatch[1]).padStart(2, '0');
@@ -518,22 +515,31 @@ function getSchedulerDefaults() {
  return '09:00';
 }
 
+function getSecondarySchedulerDefault(primaryStartTime) {
+ const envValue = normalizeTime(process.env.SECOND_SCHEDULE_TIME);
+ if (envValue && envValue !== primaryStartTime) return envValue;
+ if (DEFAULT_SECOND_SCHEDULE_TIME !== primaryStartTime) return DEFAULT_SECOND_SCHEDULE_TIME;
+ const primaryMinutes = timeToMinutes(primaryStartTime);
+ if (primaryMinutes === null) return '18:00';
+ return minutesToTimeString(primaryMinutes + 60) || '18:00';
+}
+
 function getSchedulerSettings() {
- const scheduleTime = normalizeTime(getSetting('scheduleTime')) || getSchedulerDefaults();
- const runtimeEndTime = normalizeTime(getSetting('runtimeEndTime')) || '23:00';
- const minIntervalMinutes = Number(getSetting('minIntervalMinutes') || 20);
- const rotationGapMinutes = Number(getSetting('rotationGapMinutes') || 0);
- const samePostMinGapMinutes = Number(getSetting('samePostMinGapMinutes') || DEFAULT_SAME_POST_MIN_GAP_MINUTES);
+ const scheduleTime = normalizeTime(getSetting('scheduleTime')) || getPrimarySchedulerDefault();
+ const secondFromSetting = normalizeTime(getSetting('secondScheduleTime'));
+ const secondScheduleTime = (secondFromSetting && secondFromSetting !== scheduleTime)
+  ? secondFromSetting
+  : getSecondarySchedulerDefault(scheduleTime);
+ const minIntervalRaw = Number(getSetting('minIntervalMinutes'));
+ const minIntervalMinutes = Number.isFinite(minIntervalRaw) && minIntervalRaw > 0
+  ? Math.floor(minIntervalRaw)
+  : DEFAULT_BROADCAST_INTERVAL_MINUTES;
  const enabledRaw = getSetting('scheduleEnabled');
  const enabled = enabledRaw === null ? true : enabledRaw !== '0';
  return {
   scheduleTime,
-  runtimeEndTime,
-  minIntervalMinutes: Number.isFinite(minIntervalMinutes) && minIntervalMinutes > 0 ? Math.floor(minIntervalMinutes) : 20,
-  rotationGapMinutes: Number.isFinite(rotationGapMinutes) && rotationGapMinutes >= 0 ? Math.floor(rotationGapMinutes) : 0,
-  samePostMinGapMinutes: Number.isFinite(samePostMinGapMinutes) && samePostMinGapMinutes > 0
-   ? Math.floor(samePostMinGapMinutes)
-   : DEFAULT_SAME_POST_MIN_GAP_MINUTES,
+  secondScheduleTime,
+  minIntervalMinutes,
   enabled
  };
 }
@@ -935,20 +941,15 @@ function getCachedCompanyAnalyticsReport() {
 
 function getCachedScheduleForecast(targetDate, config, options = {}) {
  const startFromNow = Boolean(options.startFromNow);
- const explicitCursor = Number(options.startCursor);
- const cursorToken = Number.isFinite(explicitCursor)
-  ? `explicit:${Math.floor(explicitCursor)}`
-  : `stored:${String(getSetting('runtimeRotationCursor') || '0')}`;
+ const forceImmediateSession = Boolean(options.forceImmediateSession);
  const key = [
   scheduleForecastVersion,
   targetDate,
   config.scheduleTime,
-  config.runtimeEndTime,
+  config.secondScheduleTime,
   Number(config.minIntervalMinutes) || 0,
-  Number(config.rotationGapMinutes) || 0,
-  Number(config.samePostMinGapMinutes) || 0,
   startFromNow ? 1 : 0,
-  cursorToken
+  forceImmediateSession ? 1 : 0
  ].join('|');
  const now = Date.now();
  const cached = scheduleForecastCache.get(key);
@@ -960,13 +961,9 @@ function getCachedScheduleForecast(targetDate, config, options = {}) {
  }
 
  const posts = getActiveTelegramPostsForDate(targetDate);
- const startCursor = Number.isFinite(explicitCursor)
-  ? Math.floor(explicitCursor)
-  : getStoredRotationCursor(posts.length);
  const payload = calculateScheduleForecast(targetDate, posts, config, {
-  ...options,
   startFromNow,
-  startCursor
+  forceImmediateSession
  });
  scheduleForecastCache.set(key, {
   payload,
@@ -1218,534 +1215,227 @@ function compareCompanyPosts(a, b) {
  return Number(a?.id || 0) - Number(b?.id || 0);
 }
 
-function getPostCompanyKey(post) {
- const companyId = Number(post?.companyId || 0);
- if (companyId) return `id:${companyId}`;
- const companyName = normalizeText(post?.companyName);
- if (companyName) return `name:${companyName.toLowerCase()}`;
- const postId = Number(post?.id || 0);
- if (postId) return `post:${postId}`;
- return null;
-}
-
-function getPostRotationWeight(post) {
- return Number(post?.companyPremium) === 1 ? PREMIUM_ROTATION_WEIGHT : REGULAR_ROTATION_WEIGHT;
-}
-
-function normalizeRotationCursor(value, sequenceLength) {
- const raw = Number(value || 0);
- if (!sequenceLength || !Number.isFinite(raw) || raw < 0) return 0;
- return Math.floor(raw) % sequenceLength;
-}
-
-function getStoredRotationCursor(sequenceLength) {
- return normalizeRotationCursor(getSetting('runtimeRotationCursor'), sequenceLength);
-}
-
-function storeRotationCursor(cursor, targetDate, sequenceLength) {
- if (!sequenceLength) return;
- setSetting('runtimeRotationCursor', String(normalizeRotationCursor(cursor, sequenceLength)));
- if (isValidDateString(targetDate)) {
-  setSetting('runtimeRotationDate', targetDate);
+function hashString32(value) {
+ const text = String(value || '');
+ let hash = 2166136261;
+ for (let i = 0; i < text.length; i += 1) {
+  hash ^= text.charCodeAt(i);
+  hash = Math.imul(hash, 16777619);
  }
+ return hash >>> 0;
 }
 
-function buildWeightedRotation(posts) {
- const sortedPosts = [...posts].sort(compareCompanyPosts);
- if (!sortedPosts.length) {
-  return { sequence: [], totalWeight: 0, sortedPosts };
+function createSeededRandom(seed) {
+ let state = (Number(seed) >>> 0) || 1;
+ return () => {
+  state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+  return state / 0x100000000;
+ };
+}
+
+function shufflePostsForSession(posts, targetDate, sessionIndex) {
+ const items = [...(posts || [])];
+ if (items.length <= 1) return items;
+ const seed = hashString32(`${targetDate}|session:${sessionIndex}|posts:${items.length}`);
+ const random = createSeededRandom(seed);
+ for (let i = items.length - 1; i > 0; i -= 1) {
+  const j = Math.floor(random() * (i + 1));
+  [items[i], items[j]] = [items[j], items[i]];
  }
- const nodes = sortedPosts.map((post, index) => ({
-  post,
-  index,
-  weight: getPostRotationWeight(post),
-  current: 0
+ return items;
+}
+
+function rotatePosts(posts, shift = 1) {
+ const items = [...(posts || [])];
+ if (items.length <= 1) return items;
+ const normalizedShift = ((Math.floor(shift) % items.length) + items.length) % items.length;
+ if (!normalizedShift) return items;
+ return items.slice(normalizedShift).concat(items.slice(0, normalizedShift));
+}
+
+function postOrderSignature(posts) {
+ return (posts || []).map((post) => Number(post?.id || 0)).join(',');
+}
+
+function formatPlanMinuteLabel(minutes) {
+ if (!Number.isFinite(minutes)) return null;
+ const normalized = Math.max(0, Math.floor(minutes));
+ const dayOffset = Math.floor(normalized / (24 * 60));
+ const time = minutesToTimeString(normalized) || null;
+ if (!time) return null;
+ if (dayOffset <= 0) return time;
+ return `${time} (+${dayOffset}d)`;
+}
+
+function getSessionStartRows(config) {
+ const unique = new Set();
+ const rows = [];
+ const timeValues = [config?.scheduleTime, config?.secondScheduleTime];
+ for (const raw of timeValues) {
+  const normalized = normalizeTime(raw);
+  const minutes = timeToMinutes(normalized);
+  if (minutes === null) continue;
+  if (unique.has(minutes)) continue;
+  unique.add(minutes);
+  rows.push({ configuredTime: normalized, configuredMinutes: minutes });
+ }
+ rows.sort((a, b) => a.configuredMinutes - b.configuredMinutes);
+ return rows.map((row, index) => ({
+  sessionIndex: index + 1,
+  configuredTime: row.configuredTime,
+  configuredMinutes: row.configuredMinutes
  }));
- const totalWeight = nodes.reduce((sum, node) => sum + node.weight, 0);
- if (!totalWeight) {
-  return { sequence: [], totalWeight: 0, sortedPosts };
- }
- const sequence = [];
- for (let step = 0; step < totalWeight; step += 1) {
-  let best = null;
-  for (const node of nodes) {
-   node.current += node.weight;
-   if (!best || node.current > best.current) {
-    best = node;
-    continue;
-   }
-   if (node.current === best.current) {
-    const byPost = compareCompanyPosts(node.post, best.post);
-    if (byPost < 0 || (byPost === 0 && node.index < best.index)) {
-     best = node;
-    }
-   }
-  }
-  best.current -= totalWeight;
-  sequence.push(best.post);
- }
- return { sequence, totalWeight, sortedPosts };
-}
-
-function getCompanySentCountMap(companyIds) {
- const uniqueIds = Array.from(new Set((companyIds || [])
-  .map((id) => Number(id || 0))
-  .filter((id) => id > 0)));
- if (!uniqueIds.length) return new Map();
- const placeholders = uniqueIds.map(() => '?').join(',');
- const rows = db.prepare(`
-  SELECT companyId, COUNT(*) as sentCount
-  FROM logs
-  WHERE platform = 'telegram'
-   AND status = 'sent'
-   AND companyId IN (${placeholders})
-  GROUP BY companyId
- `).all(...uniqueIds);
- const map = new Map();
- for (const row of rows) {
-  const companyId = Number(row?.companyId || 0);
-  if (!companyId) continue;
-  map.set(companyId, Number(row?.sentCount || 0));
- }
- return map;
-}
-
-function getCyclicDistance(index, pointer, size) {
- if (!size) return 0;
- return (index - pointer + size) % size;
 }
 
 function buildRuntimePlan(targetDate, posts, config, options = {}) {
- const minIntervalMinutes = Math.max(1, Number(config.minIntervalMinutes) || 1);
- const rotationGapMinutes = Math.max(0, Number(config.rotationGapMinutes) || 0);
- const samePostMinGapMinutes = Math.max(
-  minIntervalMinutes,
-  Number(config.samePostMinGapMinutes) || minIntervalMinutes
- );
- const windowStart = timeToMinutes(config.scheduleTime);
- const windowEnd = timeToMinutes(config.runtimeEndTime);
- const sortedPosts = [...posts].sort(compareCompanyPosts);
- const perPostCounts = new Map(sortedPosts.map((post) => [post.id, 0]));
- const preferredMinuteByPost = new Map();
- const pendingPreferred = [];
- const companyMap = new Map();
- for (const post of sortedPosts) {
-  const companyKey = getPostCompanyKey(post) || `post:${post.id}`;
-  if (!companyMap.has(companyKey)) {
-   companyMap.set(companyKey, {
-    key: companyKey,
-    companyId: Number(post?.companyId || 0) || null,
-    companyName: normalizeText(post?.companyName) || null,
-    companyPremium: Number(post?.companyPremium) === 1 ? 1 : 0,
-    weight: getPostRotationWeight(post),
-    posts: [],
-    sentCount: 0,
-    plannedCount: 0,
-    postCursor: 0,
-    orderIndex: 0
+ const intervalMinutes = Math.max(1, Number(config?.minIntervalMinutes) || DEFAULT_BROADCAST_INTERVAL_MINUTES);
+ const sortedPosts = [...(posts || [])].sort(compareCompanyPosts);
+ const perPostCounts = new Map(sortedPosts.map((post) => [Number(post?.id || 0), 0]));
+ const sessionRows = getSessionStartRows(config);
+ const nowMinutes = (options.startFromNow && targetDate === getCurrentDateString())
+  ? getCurrentMinutes()
+  : null;
+ const forceImmediateSession = Boolean(options.forceImmediateSession);
+ const maxDayMinutes = 24 * 60;
+
+ const sessions = [];
+ const slots = [];
+ let immediateSessionUsed = false;
+ let previousSessionOrder = null;
+
+ for (const sessionRow of sessionRows) {
+  let startMinutes = sessionRow.configuredMinutes;
+  let mode = 'scheduled';
+  if (Number.isFinite(nowMinutes) && startMinutes < nowMinutes) {
+   if ((nowMinutes - startMinutes) <= intervalMinutes) {
+    startMinutes = nowMinutes;
+    mode = 'immediate';
+   } else if (forceImmediateSession && !immediateSessionUsed) {
+    startMinutes = nowMinutes;
+    mode = 'immediate';
+    immediateSessionUsed = true;
+   } else {
+    sessions.push({
+      sessionIndex: sessionRow.sessionIndex,
+      configuredStartTime: sessionRow.configuredTime,
+      configuredStartMinutes: sessionRow.configuredMinutes,
+      startTime: sessionRow.configuredTime,
+      startMinutes: sessionRow.configuredMinutes,
+      endTime: null,
+      endMinutes: null,
+      endLabel: null,
+      plannedPublications: 0,
+      overflowSkipped: sortedPosts.length,
+      mode: 'skipped_past'
+    });
+    continue;
+   }
+  }
+
+  let postsForSession = shufflePostsForSession(sortedPosts, targetDate, sessionRow.sessionIndex);
+  if (postsForSession.length > 1) {
+   const currentOrder = postOrderSignature(postsForSession);
+   if (previousSessionOrder && currentOrder === previousSessionOrder) {
+    postsForSession = rotatePosts(postsForSession, sessionRow.sessionIndex || 1);
+   }
+  }
+  previousSessionOrder = postOrderSignature(postsForSession);
+
+  let plannedPublications = 0;
+  let overflowSkipped = 0;
+  for (const post of postsForSession) {
+   const candidateMinutes = startMinutes + (plannedPublications * intervalMinutes);
+   if (candidateMinutes >= maxDayMinutes) {
+    overflowSkipped += 1;
+    continue;
+   }
+   const postId = Number(post?.id || 0);
+   if (!postId) continue;
+   slots.push({
+    post,
+    minutes: candidateMinutes,
+    sessionIndex: sessionRow.sessionIndex,
+    source: mode === 'immediate' ? 'immediate' : 'session'
    });
+   perPostCounts.set(postId, (perPostCounts.get(postId) || 0) + 1);
+   plannedPublications += 1;
   }
-  const company = companyMap.get(companyKey);
-  company.posts.push(post);
-  if (Number(post?.companyPremium) === 1) {
-   company.companyPremium = 1;
-   company.weight = PREMIUM_ROTATION_WEIGHT;
-  }
-  const preferredMinute = timeToMinutes(post?.preferredTime);
-  if (preferredMinute === null) continue;
-  preferredMinuteByPost.set(post.id, preferredMinute);
-  pendingPreferred.push({ post, preferredMinute, companyKey });
+
+  const endMinutes = plannedPublications > 0
+   ? startMinutes + ((plannedPublications - 1) * intervalMinutes)
+   : null;
+  sessions.push({
+   sessionIndex: sessionRow.sessionIndex,
+   configuredStartTime: sessionRow.configuredTime,
+   configuredStartMinutes: sessionRow.configuredMinutes,
+   startTime: minutesToTimeString(startMinutes),
+   startMinutes,
+   endTime: endMinutes === null ? null : minutesToTimeString(endMinutes),
+   endMinutes,
+   endLabel: endMinutes === null ? null : formatPlanMinuteLabel(endMinutes),
+   plannedPublications,
+   overflowSkipped,
+   mode
+  });
  }
- const companies = Array.from(companyMap.values()).sort((a, b) => {
-  const nameA = String(a?.companyName || '');
-  const nameB = String(b?.companyName || '');
-  const byName = nameA.localeCompare(nameB, 'en', { sensitivity: 'base' });
-  if (byName) return byName;
-  return String(a?.key || '').localeCompare(String(b?.key || ''), 'en', { sensitivity: 'base' });
- });
- for (let i = 0; i < companies.length; i += 1) {
-  companies[i].orderIndex = i;
-  companies[i].posts.sort(compareCompanyPosts);
- }
- const companyOrderIndex = new Map(companies.map((company, index) => [company.key, index]));
- const sentCountByCompanyId = getCompanySentCountMap(companies.map((company) => company.companyId));
- for (const company of companies) {
-  if (!company.companyId) continue;
-  company.sentCount = sentCountByCompanyId.get(company.companyId) || 0;
- }
- const sequenceLength = companies.length;
- const totalWeight = companies.reduce((sum, company) => sum + Math.max(1, Number(company.weight) || 1), 0);
- pendingPreferred.sort((a, b) => {
-  if (a.preferredMinute !== b.preferredMinute) return a.preferredMinute - b.preferredMinute;
+
+ slots.sort((a, b) => {
+  if (a.minutes !== b.minutes) return a.minutes - b.minutes;
+  if (a.sessionIndex !== b.sessionIndex) return a.sessionIndex - b.sessionIndex;
   return compareCompanyPosts(a.post, b.post);
  });
- const defaultResult = {
-  sequenceLength,
-  totalWeight,
-  sortedPosts,
-  perPostCounts,
-  slots: [],
-  totalPublications: 0,
-  fullRotations: 0,
-  partialPublications: 0,
-  startCursor: 0,
-  endCursor: 0,
-  windowStartMinutes: windowStart,
-  windowEndMinutes: windowEnd
- };
- if (!sequenceLength || windowStart === null || windowEnd === null || windowEnd < windowStart) {
-  return defaultResult;
- }
-
- let runtimeStartMinutes = windowStart;
- const isToday = targetDate === getCurrentDateString();
- if (options.startFromNow && isToday) {
-  const nowMinutes = getCurrentMinutes();
-  runtimeStartMinutes = Math.max(runtimeStartMinutes, nowMinutes);
- }
- if (runtimeStartMinutes > windowEnd) {
-  return {
-   ...defaultResult,
-   startCursor: normalizeRotationCursor(options.startCursor, sequenceLength),
-   endCursor: normalizeRotationCursor(options.startCursor, sequenceLength),
-   windowStartMinutes: runtimeStartMinutes
-  };
- }
-
- const startCursor = options.startCursor === undefined || options.startCursor === null
-  ? getStoredRotationCursor(sequenceLength)
-  : normalizeRotationCursor(options.startCursor, sequenceLength);
- let pointer = startCursor;
- let currentMinutes = runtimeStartMinutes;
- const slots = [];
- const preferredReleased = new Set();
- const lastScheduledMinuteByPost = new Map();
-
- const isPostBlockedByPreferredWindow = (candidate) => {
-  const preferredMinute = preferredMinuteByPost.get(candidate.id);
-  const waitingPreferredWindow = preferredMinute !== undefined &&
-   !preferredReleased.has(candidate.id) &&
-   currentMinutes < preferredMinute;
-  return waitingPreferredWindow;
- };
-
- const getPostCooldownReleaseMinute = (candidate) => {
-  const postId = Number(candidate?.id || 0);
-  if (!postId) return currentMinutes;
-  const lastScheduledMinute = lastScheduledMinuteByPost.get(postId);
-  if (!Number.isFinite(lastScheduledMinute)) return currentMinutes;
-  return lastScheduledMinute + samePostMinGapMinutes;
- };
-
- const isPostBlockedByCooldown = (candidate) => {
-  return getPostCooldownReleaseMinute(candidate) > currentMinutes;
- };
-
- const isPostUnavailableAtCurrentMinute = (candidate) => {
-  return isPostBlockedByPreferredWindow(candidate) || isPostBlockedByCooldown(candidate);
- };
-
- const hasAvailableRotatingPostInCompany = (company) => {
-  return company.posts.some((post) => !isPostUnavailableAtCurrentMinute(post));
- };
-
- const pickPostFromCompany = (company, lastPostId = null) => {
-  const totalPosts = company.posts.length;
-  if (!totalPosts) return null;
-  let fallback = null;
-  for (let shift = 0; shift < totalPosts; shift += 1) {
-   const index = (company.postCursor + shift) % totalPosts;
-   const candidate = company.posts[index];
-   if (isPostUnavailableAtCurrentMinute(candidate)) continue;
-   const nextCursor = (index + 1) % totalPosts;
-   if (!fallback) fallback = { post: candidate, nextCursor };
-   if (lastPostId && Number(candidate?.id || 0) === Number(lastPostId) && totalPosts > 1) {
-    continue;
-   }
-   return { post: candidate, nextCursor };
-  }
-  return fallback;
- };
-
- const pickBestCompanyFromKeys = (candidateKeys, lastCompanyKey = null, requireDifferentCompany = false) => {
-  const uniqueKeys = Array.from(new Set((candidateKeys || []).filter((key) => companyMap.has(key))));
-  if (!uniqueKeys.length) return null;
-  let keys = uniqueKeys;
-  if (requireDifferentCompany && lastCompanyKey) {
-   const filtered = keys.filter((key) => key !== lastCompanyKey);
-   if (!filtered.length) return null;
-   keys = filtered;
-  }
-  let best = null;
-  for (const key of keys) {
-   const company = companyMap.get(key);
-   if (!company) continue;
-   const weight = Math.max(1, Number(company.weight) || 1);
-   const score = (Number(company.sentCount || 0) + Number(company.plannedCount || 0)) / weight;
-   const orderIndex = companyOrderIndex.get(company.key) ?? 0;
-   const distance = getCyclicDistance(orderIndex, pointer, sequenceLength);
-   if (!best) {
-    best = { company, score, distance };
-    continue;
-   }
-   if (score < best.score - 1e-9) {
-    best = { company, score, distance };
-    continue;
-   }
-   if (Math.abs(score - best.score) <= 1e-9) {
-    if (distance < best.distance) {
-     best = { company, score, distance };
-     continue;
-    }
-    if (distance === best.distance) {
-     const byName = String(company.companyName || '').localeCompare(String(best.company.companyName || ''), 'en', { sensitivity: 'base' });
-     if (byName < 0) {
-      best = { company, score, distance };
-      continue;
-     }
-     if (byName === 0) {
-      const byKey = String(company.key || '').localeCompare(String(best.company.key || ''), 'en', { sensitivity: 'base' });
-      if (byKey < 0) {
-       best = { company, score, distance };
-      }
-     }
-    }
-   }
-  }
-  return best?.company || null;
- };
-
- const getDuePreferredEntries = () => {
-  const due = [];
-  for (let i = 0; i < pendingPreferred.length; i += 1) {
-   const entry = pendingPreferred[i];
-   if (entry.preferredMinute > currentMinutes) break;
-   due.push({ index: i, entry });
-  }
-  return due;
- };
-
- const pickDuePreferredPostForCompany = (preferredCompany, duePreferredRows) => {
-  if (!preferredCompany) return null;
-  for (const dueRow of duePreferredRows) {
-   if (dueRow.entry.companyKey !== preferredCompany.key) continue;
-   const selectedPost = dueRow.entry.post;
-   if (isPostBlockedByCooldown(selectedPost)) continue;
-   pendingPreferred.splice(dueRow.index, 1);
-   pointer = (preferredCompany.orderIndex + 1) % sequenceLength;
-   const preferredPostIndex = preferredCompany.posts.findIndex((item) => Number(item?.id || 0) === Number(selectedPost?.id || 0));
-   if (preferredPostIndex >= 0) {
-    preferredCompany.postCursor = (preferredPostIndex + 1) % preferredCompany.posts.length;
-   }
-   return selectedPost;
-  }
-  return null;
- };
-
- const getRotatingCompanyKeys = () => {
-  return companies
-   .filter((company) => hasAvailableRotatingPostInCompany(company))
-   .map((company) => company.key);
- };
-
- const getNextAvailabilityMinute = () => {
-  let nextMinute = null;
-  for (const company of companies) {
-   for (const post of company.posts) {
-    let candidateMinute = currentMinutes;
-    const preferredMinute = preferredMinuteByPost.get(post.id);
-    if (preferredMinute !== undefined && !preferredReleased.has(post.id) && candidateMinute < preferredMinute) {
-     candidateMinute = preferredMinute;
-    }
-    candidateMinute = Math.max(candidateMinute, getPostCooldownReleaseMinute(post));
-    if (candidateMinute <= currentMinutes) {
-     return currentMinutes;
-    }
-    if (nextMinute === null || candidateMinute < nextMinute) {
-     nextMinute = candidateMinute;
-    }
-   }
-  }
-  return nextMinute;
- };
-
- while (currentMinutes <= windowEnd) {
-  let post = null;
-  let usedPreferredOverride = false;
-  const previousSlot = slots[slots.length - 1];
-  const lastCompanyKey = getPostCompanyKey(previousSlot?.post);
-  const lastPostId = Number(previousSlot?.post?.id || 0) || null;
-
-  const duePreferred = getDuePreferredEntries();
-  const duePreferredCompanyKeys = Array.from(new Set(duePreferred.map((row) => row.entry.companyKey)));
-  const rotatingCompanyKeys = getRotatingCompanyKeys();
-
-  const preferredDifferentCompany = pickBestCompanyFromKeys(duePreferredCompanyKeys, lastCompanyKey, Boolean(lastCompanyKey));
-  post = pickDuePreferredPostForCompany(preferredDifferentCompany, duePreferred);
-  if (post) {
-   usedPreferredOverride = true;
-  }
-
-  if (!post) {
-   const rotatingDifferentCompany = pickBestCompanyFromKeys(rotatingCompanyKeys, lastCompanyKey, Boolean(lastCompanyKey));
-   if (rotatingDifferentCompany) {
-    const pickedPost = pickPostFromCompany(rotatingDifferentCompany, lastPostId);
-    if (pickedPost) {
-     post = pickedPost.post;
-     rotatingDifferentCompany.postCursor = pickedPost.nextCursor;
-     pointer = (rotatingDifferentCompany.orderIndex + 1) % sequenceLength;
-    }
-   }
-  }
-
-  if (!post) {
-   const preferredAnyCompany = pickBestCompanyFromKeys(duePreferredCompanyKeys);
-   post = pickDuePreferredPostForCompany(preferredAnyCompany, duePreferred);
-   if (post) {
-    usedPreferredOverride = true;
-   }
-  }
-
-  if (!post) {
-   const rotatingAnyCompany = pickBestCompanyFromKeys(rotatingCompanyKeys);
-   if (rotatingAnyCompany) {
-    const pickedPost = pickPostFromCompany(rotatingAnyCompany, lastPostId);
-    if (pickedPost) {
-     post = pickedPost.post;
-     rotatingAnyCompany.postCursor = pickedPost.nextCursor;
-     pointer = (rotatingAnyCompany.orderIndex + 1) % sequenceLength;
-    }
-   }
-   if (!post && !rotatingCompanyKeys.length && pendingPreferred.length) {
-    const nextPreferredMinute = pendingPreferred[0].preferredMinute;
-    if (nextPreferredMinute > currentMinutes) {
-     currentMinutes = nextPreferredMinute;
-     continue;
-    }
-   }
-  }
-
-  if (!post) {
-   const nextAvailabilityMinute = getNextAvailabilityMinute();
-   if (
-    Number.isFinite(nextAvailabilityMinute) &&
-    nextAvailabilityMinute > currentMinutes &&
-    nextAvailabilityMinute <= windowEnd
-   ) {
-    currentMinutes = nextAvailabilityMinute;
-    continue;
-   }
-  }
-
-  if (!post) break;
-  if (preferredMinuteByPost.has(post.id)) {
-   preferredReleased.add(post.id);
-  }
-  const selectedCompanyKey = getPostCompanyKey(post);
-  const selectedCompany = selectedCompanyKey ? companyMap.get(selectedCompanyKey) : null;
-  if (selectedCompany) {
-   selectedCompany.plannedCount += 1;
-  }
-  slots.push({
-   post,
-   minutes: currentMinutes,
-   source: usedPreferredOverride ? 'preferred' : 'rotation',
-   rotationCursorAfter: pointer
-  });
-  const scheduledPostId = Number(post?.id || 0);
-  if (scheduledPostId) {
-   lastScheduledMinuteByPost.set(scheduledPostId, currentMinutes);
-  }
-  perPostCounts.set(post.id, (perPostCounts.get(post.id) || 0) + 1);
-  currentMinutes += minIntervalMinutes;
-  if (!usedPreferredOverride && pointer === 0) currentMinutes += rotationGapMinutes;
- }
 
  const totalPublications = slots.length;
- const fullRotations = sequenceLength ? Math.floor(totalPublications / sequenceLength) : 0;
- const partialPublications = sequenceLength ? totalPublications % sequenceLength : 0;
+ const estimatedEndMinutes = totalPublications ? slots[slots.length - 1].minutes : null;
 
  return {
-  sequenceLength,
-  totalWeight,
   sortedPosts,
   perPostCounts,
   slots,
+  sessions,
+  intervalMinutes,
   totalPublications,
-  fullRotations,
-  partialPublications,
-  startCursor,
-  endCursor: pointer,
-  windowStartMinutes: runtimeStartMinutes,
-  windowEndMinutes: windowEnd
+  estimatedEndMinutes
  };
 }
 
 function calculateScheduleForecast(date, posts, config, options = {}) {
  const plan = buildRuntimePlan(date, posts, config, {
   startFromNow: Boolean(options.startFromNow),
-  startCursor: options.startCursor
+  forceImmediateSession: Boolean(options.forceImmediateSession)
  });
  const perPost = plan.sortedPosts.map((post) => ({
-  postId: post.id,
-  companyName: post.companyName || null,
-  companyPremium: Number(post.companyPremium) === 1 ? 1 : 0,
-  weight: getPostRotationWeight(post),
-  publishCount: plan.perPostCounts.get(post.id) || 0
+  postId: Number(post?.id || 0),
+  companyName: post?.companyName || null,
+  publishCount: plan.perPostCounts.get(Number(post?.id || 0)) || 0
  }));
-
- const distributionMap = new Map();
- for (const row of perPost) {
-  distributionMap.set(row.publishCount, (distributionMap.get(row.publishCount) || 0) + 1);
- }
- const publishDistribution = Array.from(distributionMap.entries())
-  .map(([publishCount, postCount]) => ({ publishCount, postCount }))
-  .sort((a, b) => b.publishCount - a.publishCount);
-
- let equalRotations = true;
- if (perPost.length) {
-  const normalizedShares = perPost.map((row) => row.publishCount / Math.max(1, row.weight));
-  const maxShare = Math.max(...normalizedShares);
-  const minShare = Math.min(...normalizedShares);
-  equalRotations = (maxShare - minShare) <= 1;
- }
-
- const suggestions = perPost.length ? {
-  overall: {
-   scheduleTime: config.scheduleTime,
-   runtimeEndTime: config.runtimeEndTime,
-   minIntervalMinutes: config.minIntervalMinutes,
-   rotationGapMinutes: config.rotationGapMinutes,
-   samePostMinGapMinutes: config.samePostMinGapMinutes,
-   expectedPublications: plan.totalPublications,
-   expectedFullRotations: plan.fullRotations
-  }
- } : {};
+ const sessionSummaries = plan.sessions.map((session) => ({
+  sessionIndex: session.sessionIndex,
+  configuredStartTime: session.configuredStartTime,
+  startTime: session.startTime,
+  endTime: session.endTime,
+  endLabel: session.endLabel,
+  plannedPublications: session.plannedPublications,
+  overflowSkipped: session.overflowSkipped,
+  mode: session.mode
+ }));
 
  return {
   date,
   config: {
    scheduleTime: config.scheduleTime,
-   runtimeEndTime: config.runtimeEndTime,
-   minIntervalMinutes: config.minIntervalMinutes,
-   rotationGapMinutes: config.rotationGapMinutes,
-   samePostMinGapMinutes: config.samePostMinGapMinutes
+   secondScheduleTime: config.secondScheduleTime,
+   minIntervalMinutes: plan.intervalMinutes
   },
   totals: {
-   windowStartTime: minutesToTimeString(plan.windowStartMinutes) || config.scheduleTime,
-   windowEndTime: minutesToTimeString(plan.windowEndMinutes) || config.runtimeEndTime,
    activePosts: perPost.length,
-   totalWeight: plan.totalWeight,
    totalPublications: plan.totalPublications,
-   fullRotations: plan.fullRotations,
-   partialPublications: plan.partialPublications,
-   equalRotations,
-   rotationCursorStart: plan.startCursor,
-   rotationCursorEnd: plan.endCursor
+   intervalMinutes: plan.intervalMinutes,
+   sessions: sessionSummaries.length,
+   estimatedEndTime: formatPlanMinuteLabel(plan.estimatedEndMinutes)
   },
-  perPost,
-  publishDistribution,
-  suggestions
+  sessions: sessionSummaries,
+  perPost
  };
 }
 
@@ -1753,38 +1443,63 @@ function generateDailySchedule(date, startFromNow = true, options = {}) {
  const targetDate = date || getCurrentDateString();
  const settings = getSchedulerSettings();
  const posts = getActiveTelegramPostsForDate(targetDate);
-
- if (!posts.length) return { date: targetDate, total: 0, scheduled: 0 };
-
  const dayStart = `${targetDate}T00:00:00`;
  const dayEnd = `${targetDate}T23:59:59.999`;
+ const nowIsoForDate = (startFromNow && targetDate === getCurrentDateString())
+  ? nowLocalIso()
+  : dayStart;
 
  const plan = buildRuntimePlan(targetDate, posts, settings, {
-  startFromNow,
-  startCursor: options.startCursor
+  startFromNow: Boolean(startFromNow),
+  forceImmediateSession: Boolean(options.forceImmediateSession)
  });
  const createdAt = new Date().toISOString();
  const persistSchedule = db.transaction(() => {
-  db.prepare(`DELETE FROM schedule_items WHERE scheduledAt >= ? AND scheduledAt <= ? AND status = 'pending'`)
-   .run(dayStart, dayEnd);
+  db.prepare(`
+   DELETE FROM schedule_items
+   WHERE status = 'pending'
+    AND scheduledAt >= ?
+    AND scheduledAt <= ?
+  `).run(nowIsoForDate, dayEnd);
+
+  let inserted = 0;
   for (const slot of plan.slots) {
    const scheduledAt = minutesToIso(targetDate, slot.minutes);
    if (!scheduledAt) continue;
-   db.prepare(`INSERT INTO schedule_items (postId, scheduledAt, status, createdAt, rotationCursorAfter) VALUES (?,?,?,?,?)`)
-    .run(slot.post.id, scheduledAt, 'pending', createdAt, Number(slot.rotationCursorAfter) || 0);
+   if (scheduledAt < nowIsoForDate || scheduledAt > dayEnd) continue;
+   const existingNonPending = db.prepare(`
+    SELECT id
+    FROM schedule_items
+    WHERE postId = ?
+     AND scheduledAt = ?
+     AND status <> 'pending'
+    LIMIT 1
+   `).get(slot.post.id, scheduledAt);
+   if (existingNonPending?.id) continue;
+   db.prepare(`
+    INSERT INTO schedule_items (postId, scheduledAt, status, createdAt, sessionIndex)
+    VALUES (?,?,?,?,?)
+   `).run(slot.post.id, scheduledAt, 'pending', createdAt, Number(slot.sessionIndex) || null);
+   inserted += 1;
   }
+  return inserted;
  });
- persistSchedule();
+ const inserted = persistSchedule();
 
  return {
   date: targetDate,
   total: posts.length,
-  scheduled: plan.totalPublications,
-  rotationSize: plan.sequenceLength,
-  startCursor: plan.startCursor,
-  endCursor: plan.endCursor,
-  windowStartTime: minutesToTimeString(plan.windowStartMinutes),
-  windowEndTime: minutesToTimeString(plan.windowEndMinutes)
+  scheduled: inserted,
+  intervalMinutes: plan.intervalMinutes,
+  estimatedEndTime: formatPlanMinuteLabel(plan.estimatedEndMinutes),
+  sessions: plan.sessions.map((session) => ({
+   sessionIndex: session.sessionIndex,
+   startTime: session.startTime,
+   endTime: session.endLabel || session.endTime,
+   plannedPublications: session.plannedPublications,
+   overflowSkipped: session.overflowSkipped,
+   mode: session.mode
+  }))
  };
 }
 
@@ -1879,17 +1594,6 @@ function claimNextDueScheduleItem(nowIso, currentDate) {
  return claimTx();
 }
 
-function storeRotationCursorFromScheduleItem(item) {
- const cursor = Number(item?.rotationCursorAfter);
- if (!Number.isFinite(cursor) || cursor < 0) return;
- setSetting('runtimeRotationCursor', String(Math.floor(cursor)));
- const date = toDatePart(item?.scheduledAt);
- if (date) {
-  setSetting('runtimeRotationDate', date);
- }
- invalidateDerivedCaches({ analytics: false });
-}
-
 let scheduleProcessing = false;
 async function processDueSchedule(force = false) {
  if (scheduleProcessing) return;
@@ -1921,7 +1625,6 @@ async function processDueSchedule(force = false) {
     schedule_items.error,
     schedule_items.createdAt,
     schedule_items.sentAt,
-    schedule_items.rotationCursorAfter,
     schedule_items.processingStartedAt,
     posts.*,
     companies.name as companyName,
@@ -1965,7 +1668,6 @@ async function processDueSchedule(force = false) {
    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
     .run('sent', sentAt, null, null, item.scheduleId);
    insertLog(item, 'sent', null, 'auto', null, deliveryMeta);
-   storeRotationCursorFromScheduleItem(item);
    setSetting('lastSentAt', sentAt);
   } catch (e) {
    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
@@ -1977,36 +1679,40 @@ async function processDueSchedule(force = false) {
  }
 }
 
-let scheduleJob = null;
+let scheduleJobs = [];
 function configureScheduleJob() {
- if (scheduleJob) {
-  scheduleJob.stop();
-  scheduleJob = null;
+ for (const job of scheduleJobs) {
+  try {
+   job.stop();
+  } catch (e) {}
  }
+ scheduleJobs = [];
  const settings = getSchedulerSettings();
  if (!settings.enabled) return;
- const scheduleTime = normalizeTime(settings.scheduleTime);
- if (!scheduleTime) return;
- const [hh, mm] = scheduleTime.split(':').map(Number);
- const cronExpr = `${mm} ${hh} * * *`;
- scheduleJob = cron.schedule(cronExpr, async () => {
-  generateDailySchedule(undefined, true);
- }, CRON_TZ ? { timezone: CRON_TZ } : undefined);
+ const sessionStarts = getSessionStartRows(settings);
+ for (const session of sessionStarts) {
+  const [hh, mm] = session.configuredTime.split(':').map(Number);
+  const cronExpr = `${mm} ${hh} * * *`;
+  const job = cron.schedule(cronExpr, async () => {
+   generateDailySchedule(undefined, true);
+   processDueSchedule(true).catch((e) => console.log('Session run failed:', e.message));
+  }, CRON_TZ ? { timezone: CRON_TZ } : undefined);
+  scheduleJobs.push(job);
+ }
 }
 
 function ensureTodaySchedule() {
  const settings = getSchedulerSettings();
  if (!settings.enabled) return;
- const scheduleTime = normalizeTime(settings.scheduleTime);
- if (!scheduleTime) return;
+ const sessionStarts = getSessionStartRows(settings);
+ if (!sessionStarts.length) return;
  const today = getCurrentDateString();
  const dayStart = `${today}T00:00:00`;
  const dayEnd = `${today}T23:59:59.999`;
  const existing = db.prepare('SELECT COUNT(*) as count FROM schedule_items WHERE scheduledAt >= ? AND scheduledAt <= ?')
   .get(dayStart, dayEnd)?.count || 0;
  if (existing > 0) return;
- const [hh, mm] = scheduleTime.split(':').map(Number);
- const scheduleMinutes = hh * 60 + mm;
+ const scheduleMinutes = sessionStarts[0].configuredMinutes;
  const nowMinutes = getCurrentMinutes();
  if (nowMinutes >= scheduleMinutes) {
   generateDailySchedule(today, true);
@@ -2090,7 +1796,7 @@ db.prepare(`CREATE TABLE IF NOT EXISTS schedule_items (
  createdAt TEXT,
  sentAt TEXT,
  processingStartedAt TEXT,
- rotationCursorAfter INTEGER
+ sessionIndex INTEGER
 )`).run();
 
 db.prepare(`CREATE TABLE IF NOT EXISTS logs (
@@ -2157,7 +1863,7 @@ ensureColumn('logs', 'sentMessageId', 'INTEGER');
 ensureColumn('logs', 'sentViews', 'INTEGER');
 ensureColumn('logs', 'viewsUpdatedAt', 'TEXT');
 ensureColumn('schedule_items', 'processingStartedAt', 'TEXT');
-ensureColumn('schedule_items', 'rotationCursorAfter', 'INTEGER');
+ensureColumn('schedule_items', 'sessionIndex', 'INTEGER');
 db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_message_chat ON logs(platform, sentMessageId, sentChatId)').run();
 db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_platform_status_id ON logs(platform, status, id DESC)').run();
 db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_platform_date ON logs(platform, date)').run();
@@ -2194,10 +1900,8 @@ app.get('/settings', (_, res) => {
  res.send({
   scheduleEnabled: settings.enabled ? 1 : 0,
   scheduleTime: settings.scheduleTime,
-  runtimeEndTime: settings.runtimeEndTime,
-  minIntervalMinutes: settings.minIntervalMinutes,
-  rotationGapMinutes: settings.rotationGapMinutes,
-  samePostMinGapMinutes: settings.samePostMinGapMinutes
+  secondScheduleTime: settings.secondScheduleTime,
+  minIntervalMinutes: settings.minIntervalMinutes
  });
 });
 
@@ -2208,50 +1912,38 @@ app.put('/settings', (req, res) => {
  const runDateInput = String(req.body?.runDate || '').trim();
  const runDate = runDateInput || getCurrentDateString();
  if (runNow && !isValidDateString(runDate)) return badRequest(res, 'Invalid run date');
- const scheduleTime = normalizeTime(req.body?.scheduleTime);
- const runtimeEndTimeInput = req.body?.runtimeEndTime;
- const runtimeEndTime = hasNonEmptyValue(runtimeEndTimeInput)
-  ? normalizeTime(runtimeEndTimeInput)
-  : currentSettings.runtimeEndTime;
- const minIntervalMinutesRaw = Number(req.body?.minIntervalMinutes);
- const rotationGapInput = req.body?.rotationGapMinutes;
- const rotationGapMinutesRaw = hasNonEmptyValue(rotationGapInput)
-  ? Number(rotationGapInput)
-  : currentSettings.rotationGapMinutes;
- const samePostMinGapInput = req.body?.samePostMinGapMinutes;
- const samePostMinGapMinutesRaw = hasNonEmptyValue(samePostMinGapInput)
-  ? Number(samePostMinGapInput)
-  : currentSettings.samePostMinGapMinutes;
+ const scheduleTimeInput = req.body?.scheduleTime;
+ const secondScheduleTimeInput = req.body?.secondScheduleTime;
+ const minIntervalInput = req.body?.minIntervalMinutes;
+ const scheduleTime = hasNonEmptyValue(scheduleTimeInput)
+  ? normalizeTime(scheduleTimeInput)
+  : currentSettings.scheduleTime;
+ const secondScheduleTime = hasNonEmptyValue(secondScheduleTimeInput)
+  ? normalizeTime(secondScheduleTimeInput)
+  : currentSettings.secondScheduleTime;
+ const minIntervalMinutes = hasNonEmptyValue(minIntervalInput)
+  ? Number(minIntervalInput)
+  : currentSettings.minIntervalMinutes;
 
- if (scheduleTime === null) return badRequest(res, 'Invalid schedule time');
- if (runtimeEndTime === null) return badRequest(res, 'Invalid runtime end time');
- const scheduleStartMinutes = timeToMinutes(scheduleTime);
- const scheduleEndMinutes = timeToMinutes(runtimeEndTime);
- if (scheduleStartMinutes === null || scheduleEndMinutes === null || scheduleEndMinutes < scheduleStartMinutes) {
-  return badRequest(res, 'Runtime end time must be after start time');
+ if (!scheduleTime) return badRequest(res, 'Invalid first start time');
+ if (!secondScheduleTime) return badRequest(res, 'Invalid second start time');
+ if (scheduleTime === secondScheduleTime) {
+  return badRequest(res, 'First and second start time must be different');
  }
- if (!Number.isFinite(minIntervalMinutesRaw) || minIntervalMinutesRaw < 1) {
-  return badRequest(res, 'Invalid min interval');
- }
- if (!Number.isFinite(rotationGapMinutesRaw) || rotationGapMinutesRaw < 0) {
-  return badRequest(res, 'Invalid rotation gap');
- }
- if (!Number.isFinite(samePostMinGapMinutesRaw) || samePostMinGapMinutesRaw < 1) {
-  return badRequest(res, 'Invalid same post min gap');
+ if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 1 || minIntervalMinutes > 1440) {
+  return badRequest(res, 'Invalid interval minutes');
  }
 
  setSetting('scheduleEnabled', scheduleEnabled === 0 || scheduleEnabled === false || scheduleEnabled === '0' ? '0' : '1');
  setSetting('scheduleTime', scheduleTime);
- setSetting('runtimeEndTime', runtimeEndTime);
- setSetting('minIntervalMinutes', String(Math.floor(minIntervalMinutesRaw)));
- setSetting('rotationGapMinutes', String(Math.floor(rotationGapMinutesRaw)));
- setSetting('samePostMinGapMinutes', String(Math.floor(samePostMinGapMinutesRaw)));
+ setSetting('secondScheduleTime', secondScheduleTime);
+ setSetting('minIntervalMinutes', String(Math.floor(minIntervalMinutes)));
  invalidateDerivedCaches({ analytics: false });
 
  configureScheduleJob();
  let runNowResult = null;
  if (runNow) {
-  runNowResult = generateDailySchedule(runDate, true);
+  runNowResult = generateDailySchedule(runDate, true, { forceImmediateSession: true });
   processDueSchedule(true).catch((e) => console.log('Settings run-now failed:', e.message));
  }
  res.send({ ok: true, runNowResult });
@@ -2539,7 +2231,10 @@ app.post('/schedule/run', async (req, res) => {
  if (date && !isValidDateString(date)) return badRequest(res, 'Invalid date format');
  const startFromNow = !(req.body?.startFromNow === 0 || req.body?.startFromNow === false || req.body?.startFromNow === '0');
  try {
-  const result = generateDailySchedule(date, startFromNow);
+  const forceImmediateSession = req.body?.forceImmediateSession === 1
+   || req.body?.forceImmediateSession === true
+   || req.body?.forceImmediateSession === '1';
+  const result = generateDailySchedule(date, startFromNow, { forceImmediateSession });
   processDueSchedule(true).catch((e) => console.log('Manual schedule send failed:', e.message));
   res.send({ ok: true, result });
  } catch (e) {
@@ -2554,51 +2249,40 @@ app.get('/schedule/forecast', (req, res) => {
  const settings = getSchedulerSettings();
 
  const startTimeRaw = req.query?.startTime;
- const endTimeRaw = req.query?.endTime;
+ const secondStartTimeRaw = req.query?.secondStartTime;
  const minIntervalRaw = req.query?.minIntervalMinutes;
- const rotationGapRaw = req.query?.rotationGapMinutes;
- const samePostMinGapRaw = req.query?.samePostMinGapMinutes;
  const startFromNowRaw = req.query?.startFromNow;
+ const forceImmediateRaw = req.query?.forceImmediateSession;
 
  const hasStartTime = hasNonEmptyValue(startTimeRaw);
- const hasEndTime = hasNonEmptyValue(endTimeRaw);
+ const hasSecondStartTime = hasNonEmptyValue(secondStartTimeRaw);
  const hasMinInterval = hasNonEmptyValue(minIntervalRaw);
- const hasRotationGap = hasNonEmptyValue(rotationGapRaw);
- const hasSamePostMinGap = hasNonEmptyValue(samePostMinGapRaw);
  const startFromNow = startFromNowRaw === '1' || startFromNowRaw === 1 || startFromNowRaw === true || startFromNowRaw === 'true';
+ const forceImmediateSession = forceImmediateRaw === '1'
+  || forceImmediateRaw === 1
+  || forceImmediateRaw === true
+  || forceImmediateRaw === 'true';
 
  const scheduleTime = hasStartTime ? normalizeTime(startTimeRaw) : settings.scheduleTime;
- const runtimeEndTime = hasEndTime ? normalizeTime(endTimeRaw) : settings.runtimeEndTime;
+ const secondScheduleTime = hasSecondStartTime ? normalizeTime(secondStartTimeRaw) : settings.secondScheduleTime;
  const minIntervalMinutes = hasMinInterval ? Number(minIntervalRaw) : settings.minIntervalMinutes;
- const rotationGapMinutes = hasRotationGap ? Number(rotationGapRaw) : settings.rotationGapMinutes;
- const samePostMinGapMinutes = hasSamePostMinGap ? Number(samePostMinGapRaw) : settings.samePostMinGapMinutes;
 
- if (hasStartTime && scheduleTime === null) return badRequest(res, 'Invalid start time');
- if (hasEndTime && runtimeEndTime === null) return badRequest(res, 'Invalid end time');
- if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 1) {
-  return badRequest(res, 'Invalid min interval');
- }
- if (!Number.isFinite(rotationGapMinutes) || rotationGapMinutes < 0) {
-  return badRequest(res, 'Invalid rotation gap');
- }
- if (!Number.isFinite(samePostMinGapMinutes) || samePostMinGapMinutes < 1) {
-  return badRequest(res, 'Invalid same post min gap');
- }
-
- const scheduleStartMinutes = timeToMinutes(scheduleTime);
- const scheduleEndMinutes = timeToMinutes(runtimeEndTime);
- if (scheduleStartMinutes === null || scheduleEndMinutes === null || scheduleEndMinutes < scheduleStartMinutes) {
-  return badRequest(res, 'Runtime end time must be after start time');
+ if (!scheduleTime) return badRequest(res, 'Invalid first start time');
+ if (!secondScheduleTime) return badRequest(res, 'Invalid second start time');
+ if (scheduleTime === secondScheduleTime) return badRequest(res, 'First and second start time must be different');
+ if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 1 || minIntervalMinutes > 1440) {
+  return badRequest(res, 'Invalid interval minutes');
  }
 
  const forecastConfig = {
   scheduleTime,
-  runtimeEndTime,
-  minIntervalMinutes: Math.floor(minIntervalMinutes),
-  rotationGapMinutes: Math.floor(rotationGapMinutes),
-  samePostMinGapMinutes: Math.floor(samePostMinGapMinutes)
+  secondScheduleTime,
+  minIntervalMinutes: Math.floor(minIntervalMinutes)
  };
- res.send(getCachedScheduleForecast(targetDate, forecastConfig, { startFromNow }));
+ res.send(getCachedScheduleForecast(targetDate, forecastConfig, {
+  startFromNow,
+  forceImmediateSession
+ }));
 });
 
 app.get('/schedule/items', (req, res) => {
@@ -2796,9 +2480,13 @@ function stopRuntimeWorkers() {
   clearInterval(runtimeTickHandle);
   runtimeTickHandle = null;
  }
- if (scheduleJob) {
-  scheduleJob.stop();
-  scheduleJob = null;
+ if (scheduleJobs.length) {
+  for (const job of scheduleJobs) {
+   try {
+    job.stop();
+   } catch (e) {}
+  }
+  scheduleJobs = [];
  }
 }
 

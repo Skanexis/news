@@ -31,12 +31,11 @@
 Le bozze acquisite appaiono nel blocco **Bozze Telegram** e possono essere collegate ai post.
 
 ## Impostazioni pianificazione (UI admin)
-- Ora di avvio automatico: quando viene generata la pianificazione giornaliera.
-- Intervallo minimo: minuti minimi tra due post (mai due post allo stesso minuto).
-- Le aziende possono avere un orario preferito; in caso di conflitto l'orario viene spostato in avanti rispettando l'intervallo.
-- Rotazione matematica dei post:
-  - i post **con orario preferito** restano fissi nei propri slot;
-  - i post **senza orario preferito** ruotano ciclicamente giorno per giorno tra gli slot disponibili, così da coprire fasce orarie diverse e aumentare la reach.
+- Primo avvio automatico: inizio della prima sessione giornaliera.
+- Secondo avvio automatico: inizio della seconda sessione giornaliera.
+- Intervallo invio configurabile in minuti (es. 5, 10, 15) tra i post.
+- Ogni sessione prova a inviare tutti i post attivi del giorno.
+- Nel blocco forecast viene mostrata l'ora stimata di fine in base al numero di post pianificati.
 
 ## Analitiche link
 - Attiva il tracciamento link nel form del post.
@@ -47,7 +46,7 @@ Le bozze acquisite appaiono nel blocco **Bozze Telegram** e possono essere colle
 ## Pubblicazione manuale e pianificazione
 - Usa **Pubblica** per inviare un post subito.
 - Usa **Esegui Pianificazione** per generare la pianificazione del giorno su richiesta.
-- L'avvio automatico genera la pianificazione all'ora configurata.
+- L'avvio automatico genera/aggiorna la pianificazione ai due orari configurati.
 - Le azioni manuali vengono registrate con `trigger = manual`.
 
 ## Variabili ambiente (.env)
@@ -56,6 +55,8 @@ Le bozze acquisite appaiono nel blocco **Bozze Telegram** e possono essere colle
 `TELEGRAM_WEBHOOK_SECRET=...`
 `PUBLIC_BASE_URL=https://your-public-url`
 `CRON_TIME=0 9 * * *`
+`SECOND_SCHEDULE_TIME=18:00`
+`MIN_INTERVAL_MINUTES=5`
 `CRON_TZ=Europe/Moscow`
 `ANALYTICS_SALT=change_me`
 `PORT=3000`

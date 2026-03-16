@@ -76,38 +76,21 @@ function seedScheduleItem({
  scheduledAt,
  status = 'pending',
  processingStartedAt = null,
- rotationCursorAfter = 0
+ sessionIndex = 1
 } = {}) {
  const createdAt = new Date().toISOString();
  const result = db.prepare(`
-  INSERT INTO schedule_items (postId,scheduledAt,status,error,createdAt,sentAt,processingStartedAt,rotationCursorAfter)
+  INSERT INTO schedule_items (postId,scheduledAt,status,error,createdAt,sentAt,processingStartedAt,sessionIndex)
   VALUES (?,?,?,?,?,?,?,?)
- `).run(postId, scheduledAt, status, null, createdAt, null, processingStartedAt, rotationCursorAfter);
+ `).run(postId, scheduledAt, status, null, createdAt, null, processingStartedAt, sessionIndex);
  return Number(result.lastInsertRowid);
 }
 
-function seedSentLog({ companyId, postId = null, createdAt = new Date().toISOString() } = {}) {
- const date = String(createdAt).slice(0, 10);
- db.prepare(`
-  INSERT INTO logs
-   (postId,companyId,companyName,platform,date,status,error,createdAt,trigger,publishedAt,sentChatId,sentMessageId,sentViews,viewsUpdatedAt)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
- `).run(
-  postId,
-  companyId,
-  `Company ${companyId || 'N/A'}`,
-  'telegram',
-  date,
-  'sent',
-  null,
-  createdAt,
-  'manual',
-  createdAt,
-  null,
-  null,
-  null,
-  null
- );
+function minutesToClock(minutes) {
+ const normalized = Math.max(0, Math.floor(minutes));
+ const hh = String(Math.floor(normalized / 60) % 24).padStart(2, '0');
+ const mm = String(normalized % 60).padStart(2, '0');
+ return `${hh}:${mm}`;
 }
 
 beforeEach(() => {
@@ -159,7 +142,6 @@ test('processDueSchedule does not claim/send when scheduler is disabled', async 
  const scheduleId = seedScheduleItem({ postId, scheduledAt: `${today}T10:00:00` });
 
  setSetting('scheduleEnabled', '0');
- setSetting('minIntervalMinutes', '1');
  await processDueSchedule(false);
 
  const row = db.prepare('SELECT status FROM schedule_items WHERE id = ?').get(scheduleId);
@@ -189,19 +171,18 @@ test('failed send does not set lastSentAt throttle marker', async () => {
  const previousToken = process.env.TELEGRAM_BOT_TOKEN;
  process.env.TELEGRAM_BOT_TOKEN = '';
  try {
-   const today = getCurrentDateString();
-   const companyId = seedCompany();
-   const postId = seedPost({ companyId, startDate: today, endDate: today, active: 1 });
-   seedScheduleItem({ postId, scheduledAt: `${today}T00:00:00` });
+  const today = getCurrentDateString();
+  const companyId = seedCompany();
+  const postId = seedPost({ companyId, startDate: today, endDate: today, active: 1 });
+  seedScheduleItem({ postId, scheduledAt: `${today}T00:00:00` });
 
-   setSetting('scheduleEnabled', '1');
-   setSetting('minIntervalMinutes', '1');
-   await processDueSchedule(true);
+  setSetting('scheduleEnabled', '1');
+  await processDueSchedule(true);
 
-   const lastSentAt = db.prepare('SELECT value FROM settings WHERE key = ?').get('lastSentAt');
-   assert.equal(lastSentAt, undefined);
-   const failedCount = db.prepare('SELECT COUNT(*) as c FROM schedule_items WHERE status = ?').get('failed').c;
-   assert.equal(Number(failedCount), 1);
+  const lastSentAt = db.prepare('SELECT value FROM settings WHERE key = ?').get('lastSentAt');
+  assert.equal(lastSentAt, undefined);
+  const failedCount = db.prepare('SELECT COUNT(*) as c FROM schedule_items WHERE status = ?').get('failed').c;
+  assert.equal(Number(failedCount), 1);
  } finally {
   if (previousToken === undefined) {
    delete process.env.TELEGRAM_BOT_TOKEN;
@@ -211,189 +192,117 @@ test('failed send does not set lastSentAt throttle marker', async () => {
  }
 });
 
-test('buildRuntimePlan does not place preferred post before preferred time', () => {
+test('buildRuntimePlan schedules two daily sessions with 5 minute interval', () => {
  const today = getCurrentDateString();
  const posts = [
-  { id: 11, companyName: 'Alpha', companyPremium: 0, preferredTime: '10:00' },
-  { id: 22, companyName: 'Beta', companyPremium: 0, preferredTime: null }
+  { id: 11, companyId: 1, companyName: 'Alpha' },
+  { id: 22, companyId: 2, companyName: 'Beta' },
+  { id: 33, companyId: 3, companyName: 'Gamma' }
  ];
  const plan = buildRuntimePlan(today, posts, {
   scheduleTime: '09:00',
-  runtimeEndTime: '10:40',
-  minIntervalMinutes: 20,
-  rotationGapMinutes: 0
+  secondScheduleTime: '18:00',
+  minIntervalMinutes: 5
  }, {
-  startFromNow: false,
-  startCursor: 0
+  startFromNow: false
  });
 
- const alphaSlotsBefore10 = plan.slots.filter((slot) => slot.post.id === 11 && slot.minutes < 600);
- assert.equal(alphaSlotsBefore10.length, 0);
- const alphaSlots = plan.slots.filter((slot) => slot.post.id === 11);
- assert.ok(alphaSlots.length >= 1);
+ assert.equal(plan.totalPublications, 6);
+ assert.equal(plan.sessions.length, 2);
+ const firstSessionMinutes = plan.slots.filter((slot) => slot.sessionIndex === 1).map((slot) => slot.minutes);
+ const secondSessionMinutes = plan.slots.filter((slot) => slot.sessionIndex === 2).map((slot) => slot.minutes);
+ const firstSessionPostIds = plan.slots.filter((slot) => slot.sessionIndex === 1).map((slot) => Number(slot.post?.id || 0));
+ const secondSessionPostIds = plan.slots.filter((slot) => slot.sessionIndex === 2).map((slot) => Number(slot.post?.id || 0));
+ assert.deepEqual(firstSessionMinutes, [540, 545, 550]);
+ assert.deepEqual(secondSessionMinutes, [1080, 1085, 1090]);
+ assert.equal(new Set(firstSessionPostIds).size, posts.length);
+ assert.equal(new Set(secondSessionPostIds).size, posts.length);
+ assert.deepEqual([...firstSessionPostIds].sort((a, b) => a - b), [11, 22, 33]);
+ assert.deepEqual([...secondSessionPostIds].sort((a, b) => a - b), [11, 22, 33]);
+ assert.notDeepEqual(firstSessionPostIds, secondSessionPostIds);
+ assert.equal(plan.perPostCounts.get(11), 2);
+ assert.equal(plan.perPostCounts.get(22), 2);
+ assert.equal(plan.perPostCounts.get(33), 2);
 });
 
-test('buildRuntimePlan avoids consecutive slots from the same company when alternatives exist', () => {
+test('buildRuntimePlan marks overflow when session starts too late', () => {
  const today = getCurrentDateString();
  const posts = [
-  { id: 101, companyId: 1, companyName: 'Alpha', companyPremium: 0, preferredTime: null },
-  { id: 102, companyId: 1, companyName: 'Alpha', companyPremium: 0, preferredTime: null },
-  { id: 201, companyId: 2, companyName: 'Beta', companyPremium: 0, preferredTime: null }
+  { id: 101, companyId: 1, companyName: 'A' },
+  { id: 102, companyId: 2, companyName: 'B' },
+  { id: 103, companyId: 3, companyName: 'C' }
  ];
  const plan = buildRuntimePlan(today, posts, {
-  scheduleTime: '09:00',
-  runtimeEndTime: '10:40',
-  minIntervalMinutes: 20,
-  rotationGapMinutes: 0
+  scheduleTime: '23:55',
+  secondScheduleTime: '23:58',
+  minIntervalMinutes: 5
  }, {
-  startFromNow: false,
-  startCursor: 0
+  startFromNow: false
  });
 
- assert.ok(plan.slots.length >= 2);
- for (let i = 1; i < plan.slots.length; i += 1) {
-  assert.notEqual(plan.slots[i].post.companyId, plan.slots[i - 1].post.companyId);
- }
+ assert.equal(plan.totalPublications, 2);
+ assert.equal(plan.sessions[0].plannedPublications, 1);
+ assert.equal(plan.sessions[0].overflowSkipped, 2);
+ assert.equal(plan.sessions[1].plannedPublications, 1);
+ assert.equal(plan.sessions[1].overflowSkipped, 2);
 });
 
-test('buildRuntimePlan prefers non-consecutive company even when preferred post is due', () => {
+test('buildRuntimePlan can start immediately for a past session', () => {
  const today = getCurrentDateString();
- const posts = [
-  { id: 301, companyId: 10, companyName: 'Alpha', companyPremium: 0, preferredTime: '09:00' },
-  { id: 302, companyId: 10, companyName: 'Alpha', companyPremium: 0, preferredTime: '09:20' },
-  { id: 401, companyId: 20, companyName: 'Beta', companyPremium: 0, preferredTime: null }
- ];
- const plan = buildRuntimePlan(today, posts, {
-  scheduleTime: '09:00',
-  runtimeEndTime: '10:00',
-  minIntervalMinutes: 20,
-  rotationGapMinutes: 0
+ const nowIso = String(mod.nowLocalIso());
+ const hh = Number(nowIso.slice(11, 13) || 0);
+ const mm = Number(nowIso.slice(14, 16) || 0);
+ const nowMinutes = (hh * 60) + mm;
+ const pastMinutes = nowMinutes > 0 ? nowMinutes - 1 : 0;
+ const futureMinutes = Math.min(nowMinutes + 10, 23 * 60 + 59);
+ const secondStart = futureMinutes === pastMinutes ? Math.min(futureMinutes + 1, 23 * 60 + 59) : futureMinutes;
+ const plan = buildRuntimePlan(today, [{ id: 1, companyId: 1, companyName: 'A' }], {
+  scheduleTime: minutesToClock(pastMinutes),
+  secondScheduleTime: minutesToClock(secondStart),
+  minIntervalMinutes: 5
  }, {
-  startFromNow: false,
-  startCursor: 0
+  startFromNow: true,
+  forceImmediateSession: true
  });
 
- assert.ok(plan.slots.length >= 3);
- assert.equal(plan.slots[0].post.companyId, 10);
- assert.equal(plan.slots[1].post.companyId, 20);
- assert.equal(plan.slots[1].source, 'rotation');
+ const hasImmediate = plan.sessions.some((session) => session.mode === 'immediate');
+ assert.equal(hasImmediate, nowMinutes > 0);
 });
 
-test('buildRuntimePlan still schedules when only one company is available', () => {
+test('buildRuntimePlan respects custom interval from settings', () => {
  const today = getCurrentDateString();
  const posts = [
-  { id: 501, companyId: 77, companyName: 'Solo', companyPremium: 0, preferredTime: null },
-  { id: 502, companyId: 77, companyName: 'Solo', companyPremium: 0, preferredTime: null }
+  { id: 901, companyId: 1, companyName: 'A' },
+  { id: 902, companyId: 2, companyName: 'B' },
+  { id: 903, companyId: 3, companyName: 'C' }
  ];
  const plan = buildRuntimePlan(today, posts, {
   scheduleTime: '09:00',
-  runtimeEndTime: '10:00',
-  minIntervalMinutes: 20,
-  rotationGapMinutes: 0
+  secondScheduleTime: '10:00',
+  minIntervalMinutes: 12
  }, {
-  startFromNow: false,
-  startCursor: 0
+  startFromNow: false
  });
-
- assert.ok(plan.slots.length >= 2);
- const allSameCompany = plan.slots.every((slot) => slot.post.companyId === 77);
- assert.equal(allSameCompany, true);
+ const firstSessionMinutes = plan.slots.filter((slot) => slot.sessionIndex === 1).map((slot) => slot.minutes);
+ assert.deepEqual(firstSessionMinutes, [540, 552, 564]);
 });
 
-test('buildRuntimePlan enforces configured same-post minimum gap', () => {
+test('buildRuntimePlan keeps deterministic shuffle for same date/config', () => {
  const today = getCurrentDateString();
  const posts = [
-  { id: 801, companyId: 1, companyName: 'Alpha', companyPremium: 0, preferredTime: null },
-  { id: 802, companyId: 2, companyName: 'Beta', companyPremium: 0, preferredTime: null }
+  { id: 1, companyId: 1, companyName: 'A' },
+  { id: 2, companyId: 2, companyName: 'B' },
+  { id: 3, companyId: 3, companyName: 'C' },
+  { id: 4, companyId: 4, companyName: 'D' }
  ];
- const plan = buildRuntimePlan(today, posts, {
+ const config = {
   scheduleTime: '09:00',
-  runtimeEndTime: '13:00',
-  minIntervalMinutes: 20,
-  rotationGapMinutes: 0,
-  samePostMinGapMinutes: 60
- }, {
-  startFromNow: false,
-  startCursor: 0
- });
-
- const slotsByPost = new Map();
- for (const slot of plan.slots) {
-  const postId = Number(slot.post.id);
-  if (!slotsByPost.has(postId)) {
-   slotsByPost.set(postId, []);
-  }
-  slotsByPost.get(postId).push(slot.minutes);
- }
- for (const minutes of slotsByPost.values()) {
-  for (let i = 1; i < minutes.length; i += 1) {
-   assert.ok(minutes[i] - minutes[i - 1] >= 60);
-  }
- }
-});
-
-test('buildRuntimePlan prioritizes under-served regular company when historical gap is large', () => {
- const today = getCurrentDateString();
- for (let i = 0; i < 40; i += 1) {
-  seedSentLog({ companyId: 1, postId: 9000 + i });
- }
- const posts = [
-  { id: 601, companyId: 1, companyName: 'Alpha', companyPremium: 0, preferredTime: null },
-  { id: 602, companyId: 2, companyName: 'Beta', companyPremium: 0, preferredTime: null }
- ];
- const plan = buildRuntimePlan(today, posts, {
-  scheduleTime: '09:00',
-  runtimeEndTime: '09:40',
-  minIntervalMinutes: 20,
-  rotationGapMinutes: 0
- }, {
-  startFromNow: false,
-  startCursor: 0
- });
-
- const companySequence = plan.slots.map((slot) => Number(slot.post.companyId || 0));
- assert.ok(companySequence.length >= 2);
- assert.equal(companySequence[0], 2);
- const alphaCount = companySequence.filter((companyId) => companyId === 1).length;
- const betaCount = companySequence.filter((companyId) => companyId === 2).length;
- assert.ok(betaCount >= alphaCount);
-});
-
-test('buildRuntimePlan keeps premium company ahead with x1.5 weighting', () => {
- const today = getCurrentDateString();
- const posts = [
-  { id: 701, companyId: 10, companyName: 'Alpha', companyPremium: 0, preferredTime: null },
-  { id: 702, companyId: 20, companyName: 'Beta', companyPremium: 0, preferredTime: null },
-  { id: 703, companyId: 30, companyName: 'Gamma', companyPremium: 1, preferredTime: null }
- ];
- const plan = buildRuntimePlan(today, posts, {
-  scheduleTime: '09:00',
-  runtimeEndTime: '09:59',
-  minIntervalMinutes: 1,
-  rotationGapMinutes: 0
- }, {
-  startFromNow: false,
-  startCursor: 0
- });
-
- const counts = new Map();
- for (const slot of plan.slots) {
-  const companyId = Number(slot.post.companyId || 0);
-  counts.set(companyId, (counts.get(companyId) || 0) + 1);
- }
- const alphaCount = counts.get(10) || 0;
- const betaCount = counts.get(20) || 0;
- const gammaPremiumCount = counts.get(30) || 0;
-
- assert.ok(gammaPremiumCount > alphaCount);
- assert.ok(gammaPremiumCount > betaCount);
-
- const normalizedShares = [
-  alphaCount / 2,
-  betaCount / 2,
-  gammaPremiumCount / 3
- ];
- const maxShare = Math.max(...normalizedShares);
- const minShare = Math.min(...normalizedShares);
- assert.ok((maxShare - minShare) <= 1);
+  secondScheduleTime: '18:00',
+  minIntervalMinutes: 5
+ };
+ const planA = buildRuntimePlan(today, posts, config, { startFromNow: false });
+ const planB = buildRuntimePlan(today, posts, config, { startFromNow: false });
+ const compactA = planA.slots.map((slot) => `${slot.sessionIndex}:${Number(slot.post?.id || 0)}`);
+ const compactB = planB.slots.map((slot) => `${slot.sessionIndex}:${Number(slot.post?.id || 0)}`);
+ assert.deepEqual(compactA, compactB);
 });

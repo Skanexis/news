@@ -95,6 +95,8 @@ TELEGRAM_CHANNEL_ID=@channel_or_chat_id
 TELEGRAM_WEBHOOK_SECRET=long_random_secret
 PUBLIC_BASE_URL=https://admin.yosupport.it
 CRON_TIME=0 9 * * *
+SECOND_SCHEDULE_TIME=18:00
+MIN_INTERVAL_MINUTES=5
 CRON_TZ=Europe/Moscow
 ANALYTICS_SALT=long_random_salt
 PORT=3000
@@ -333,7 +335,7 @@ sudo systemctl start yosupport-backend
 ```bash
 sudo systemctl stop yosupport-backend
 sudo tar -xzf /opt/backups/<backup-file>.tar.gz -C /
-sudo systemctl start yosupport-backend
+C
 ```
 
 ---

@@ -2237,7 +2237,7 @@
               </div>
             </label>
             <label class="field span-6">
-              <span>Intervallo invio (min)</span>
+              <span>Finestra recupero (min)</span>
               <input type="number" id="minIntervalMinutes" min="1" max="1440" step="1" value="5">
             </label>
           </div>
@@ -4434,6 +4434,12 @@
         || firstSession?.endLabel
         || firstSession?.endTime
         || '-';
+      const intervalValueRaw = Number.isFinite(Number(totals.intervalMinutes))
+        ? Number(totals.intervalMinutes)
+        : Number(config.minIntervalMinutes);
+      const intervalDisplay = Number.isFinite(intervalValueRaw) && intervalValueRaw <= 0
+        ? 'Batch (senza intervallo)'
+        : `${Math.max(1, Number(intervalValueRaw) || 1)} min`;
 
       const sortedPerPost = [...perPost].sort((a, b) => {
         const byCount = Number(b?.publishCount || 0) - Number(a?.publishCount || 0);
@@ -4501,7 +4507,7 @@
           </div>
           <div class="forecast-item">
             <span>Intervallo</span>
-            <strong>${escapeHtml(String(totals.intervalMinutes || config.minIntervalMinutes || 5))} min</strong>
+            <strong>${escapeHtml(intervalDisplay)}</strong>
           </div>
           <div class="forecast-item">
             <span>Pubblicazioni Giornaliere</span>
@@ -5307,7 +5313,7 @@
         }
         const minIntervalMinutes = Number(els.minIntervalMinutes.value || 0);
         if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 1 || minIntervalMinutes > 1440) {
-          setStatus('Intervallo non valido (1-1440 minuti).', 'error');
+          setStatus('Finestra recupero non valida (1-1440 minuti).', 'error');
           return;
         }
         const secondScheduleTime = String(els.secondScheduleTime.value || '').trim();

@@ -1290,7 +1290,8 @@ function getSessionStartRows(config) {
 }
 
 function buildRuntimePlan(targetDate, posts, config, options = {}) {
- const intervalMinutes = Math.max(1, Number(config?.minIntervalMinutes) || DEFAULT_BROADCAST_INTERVAL_MINUTES);
+ const immediateGraceMinutes = Math.max(1, Number(config?.minIntervalMinutes) || DEFAULT_BROADCAST_INTERVAL_MINUTES);
+ const intervalMinutes = 0;
  const sortedPosts = [...(posts || [])].sort(compareCompanyPosts);
  const perPostCounts = new Map(sortedPosts.map((post) => [Number(post?.id || 0), 0]));
  const sessionRows = getSessionStartRows(config);
@@ -1309,7 +1310,7 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
   let startMinutes = sessionRow.configuredMinutes;
   let mode = 'scheduled';
   if (Number.isFinite(nowMinutes) && startMinutes < nowMinutes) {
-   if ((nowMinutes - startMinutes) <= intervalMinutes) {
+   if ((nowMinutes - startMinutes) <= immediateGraceMinutes) {
     startMinutes = nowMinutes;
     mode = 'immediate';
    } else if (forceImmediateSession && !immediateSessionUsed) {
@@ -1346,7 +1347,7 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
   let plannedPublications = 0;
   let overflowSkipped = 0;
   for (const post of postsForSession) {
-   const candidateMinutes = startMinutes + (plannedPublications * intervalMinutes);
+   const candidateMinutes = startMinutes;
    if (candidateMinutes >= maxDayMinutes) {
     overflowSkipped += 1;
     continue;
@@ -1364,7 +1365,7 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
   }
 
   const endMinutes = plannedPublications > 0
-   ? startMinutes + ((plannedPublications - 1) * intervalMinutes)
+   ? startMinutes
    : null;
   sessions.push({
    sessionIndex: sessionRow.sessionIndex,
@@ -1608,78 +1609,77 @@ async function processDueSchedule(force = false) {
  try {
   const settings = getSchedulerSettings();
   if (!force && !settings.enabled) return;
-  const minIntervalMs = Math.max(1, settings.minIntervalMinutes) * 60 * 1000;
-  const lastSentAt = getSetting('lastSentAt');
-  if (!force && lastSentAt) {
-   const delta = Date.now() - new Date(lastSentAt).getTime();
-   if (delta < minIntervalMs) return;
-  }
 
   cleanupOrphanScheduleItems();
   reclaimStaleProcessingItems(Math.max(10, settings.minIntervalMinutes * 2));
   const currentDate = getCurrentDateString();
   markExpiredPendingScheduleItems(currentDate);
   markInvalidPendingScheduleItems();
-  const nowIso = nowLocalIso();
-  const claimedScheduleId = claimNextDueScheduleItem(nowIso, currentDate);
-  if (!claimedScheduleId) return;
-  const item = db.prepare(`
-   SELECT
-    schedule_items.id as scheduleId,
-    schedule_items.postId as schedulePostId,
-    schedule_items.scheduledAt,
-    schedule_items.status,
-    schedule_items.error,
-    schedule_items.createdAt,
-    schedule_items.sentAt,
-    schedule_items.processingStartedAt,
-    posts.*,
-    companies.name as companyName,
-    links.code as linkCode
-   FROM schedule_items
-   LEFT JOIN posts ON schedule_items.postId = posts.id
-   LEFT JOIN companies ON posts.companyId = companies.id
-   LEFT JOIN links ON posts.linkId = links.id
-   WHERE schedule_items.id = ?
-   LIMIT 1
-  `).get(claimedScheduleId);
+  while (true) {
+   const nowIso = nowLocalIso();
+   const claimedScheduleId = claimNextDueScheduleItem(nowIso, currentDate);
+   if (!claimedScheduleId) break;
 
-  if (!item) return;
+   const item = db.prepare(`
+    SELECT
+     schedule_items.id as scheduleId,
+     schedule_items.postId as schedulePostId,
+     schedule_items.scheduledAt,
+     schedule_items.status,
+     schedule_items.error,
+     schedule_items.createdAt,
+     schedule_items.sentAt,
+     schedule_items.processingStartedAt,
+     posts.*,
+     companies.name as companyName,
+     links.code as linkCode
+    FROM schedule_items
+    LEFT JOIN posts ON schedule_items.postId = posts.id
+    LEFT JOIN companies ON posts.companyId = companies.id
+    LEFT JOIN links ON posts.linkId = links.id
+    WHERE schedule_items.id = ?
+    LIMIT 1
+   `).get(claimedScheduleId);
 
-  const sentAt = new Date().toISOString();
-  if (!item.platform) {
-   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
-    .run('failed', sentAt, 'Post not found', null, item.scheduleId);
-   return;
-  }
-  if (item.platform !== 'telegram') {
-   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
-    .run('failed', sentAt, 'Unsupported platform', null, item.scheduleId);
-   return;
-  }
-  const scheduledDate = toDatePart(item.scheduledAt);
-  const inCampaignWindow = Number(item.active) === 1 &&
-   isValidDateString(item.startDate) &&
-   isValidDateString(item.endDate) &&
-   isValidDateString(scheduledDate) &&
-   item.startDate <= scheduledDate &&
-   item.endDate >= scheduledDate;
-  if (!inCampaignWindow) {
-   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
-    .run('failed', sentAt, 'Skipped: post inactive or outside campaign date', null, item.scheduleId);
-   return;
-  }
-  try {
-   let deliveryMeta = null;
-   deliveryMeta = await sendTelegramPost(item);
-   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
-    .run('sent', sentAt, null, null, item.scheduleId);
-   insertLog(item, 'sent', null, 'auto', null, deliveryMeta);
-   setSetting('lastSentAt', sentAt);
-  } catch (e) {
-   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
-    .run('failed', sentAt, e.message, null, item.scheduleId);
-   insertLog(item, 'failed', e.message, 'auto');
+   const sentAt = new Date().toISOString();
+   if (!item?.scheduleId) {
+    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+     .run('failed', sentAt, 'Post not found', null, claimedScheduleId);
+    continue;
+   }
+   if (!item.platform) {
+    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+     .run('failed', sentAt, 'Post not found', null, item.scheduleId);
+    continue;
+   }
+   if (item.platform !== 'telegram') {
+    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+     .run('failed', sentAt, 'Unsupported platform', null, item.scheduleId);
+    continue;
+   }
+   const scheduledDate = toDatePart(item.scheduledAt);
+   const inCampaignWindow = Number(item.active) === 1 &&
+    isValidDateString(item.startDate) &&
+    isValidDateString(item.endDate) &&
+    isValidDateString(scheduledDate) &&
+    item.startDate <= scheduledDate &&
+    item.endDate >= scheduledDate;
+   if (!inCampaignWindow) {
+    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+     .run('failed', sentAt, 'Skipped: post inactive or outside campaign date', null, item.scheduleId);
+    continue;
+   }
+   try {
+    const deliveryMeta = await sendTelegramPost(item);
+    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+     .run('sent', sentAt, null, null, item.scheduleId);
+    insertLog(item, 'sent', null, 'auto', null, deliveryMeta);
+    setSetting('lastSentAt', sentAt);
+   } catch (e) {
+    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+     .run('failed', sentAt, e.message, null, item.scheduleId);
+    insertLog(item, 'failed', e.message, 'auto');
+   }
   }
  } finally {
   scheduleProcessing = false;

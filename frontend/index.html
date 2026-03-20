@@ -2238,7 +2238,7 @@
             </label>
             <label class="field span-6">
               <span>Finestra recupero (min)</span>
-              <input type="number" id="minIntervalMinutes" min="1" max="1440" step="1" value="5">
+              <input type="number" id="minIntervalMinutes" min="0" max="1440" step="1" value="5">
             </label>
           </div>
           <div class="row">
@@ -4410,7 +4410,8 @@
       els.scheduleEnabledLabel.textContent = els.scheduleEnabled.checked ? 'Attivo' : 'Disattivo';
       els.scheduleTime.value = state.settings.scheduleTime || '';
       els.secondScheduleTime.value = state.settings.secondScheduleTime || '';
-      els.minIntervalMinutes.value = state.settings.minIntervalMinutes || 5;
+      const rawMinInterval = Number(state.settings.minIntervalMinutes);
+      els.minIntervalMinutes.value = String(Number.isFinite(rawMinInterval) && rawMinInterval >= 0 ? Math.floor(rawMinInterval) : 5);
     }
 
     function renderSchedulerForecast() {
@@ -4506,7 +4507,7 @@
             <strong>${escapeHtml(String(totals.activePosts || 0))}</strong>
           </div>
           <div class="forecast-item">
-            <span>Intervallo</span>
+            <span>Modalità invio</span>
             <strong>${escapeHtml(intervalDisplay)}</strong>
           </div>
           <div class="forecast-item">
@@ -5311,9 +5312,10 @@
         if (runNow) {
           await syncRuntimeDate();
         }
-        const minIntervalMinutes = Number(els.minIntervalMinutes.value || 0);
-        if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 1 || minIntervalMinutes > 1440) {
-          setStatus('Finestra recupero non valida (1-1440 minuti).', 'error');
+        const minIntervalRaw = String(els.minIntervalMinutes.value ?? '').trim();
+        const minIntervalMinutes = Number(minIntervalRaw);
+        if (minIntervalRaw === '' || !Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 0 || minIntervalMinutes > 1440) {
+          setStatus('Finestra recupero non valida (0-1440 minuti).', 'error');
           return;
         }
         const secondScheduleTime = String(els.secondScheduleTime.value || '').trim();

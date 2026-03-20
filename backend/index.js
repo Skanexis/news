@@ -36,7 +36,7 @@ if (!fs.existsSync(uploadsDir)) {
 const allowedPlatforms = new Set(['telegram']);
 const MAX_POST_BUTTONS = 8;
 const MAX_POST_BUTTON_TEXT_LENGTH = 64;
-const DEFAULT_BROADCAST_INTERVAL_MINUTES = parsePositiveInt(process.env.MIN_INTERVAL_MINUTES, 5, 1, 1440);
+const DEFAULT_BROADCAST_INTERVAL_MINUTES = parsePositiveInt(process.env.MIN_INTERVAL_MINUTES, 5, 0, 1440);
 const DEFAULT_LOGS_PAGE_SIZE = 50;
 const MAX_LOGS_PAGE_SIZE = 200;
 const ANALYTICS_CACHE_TTL_MS = parsePositiveInt(process.env.ANALYTICS_CACHE_TTL_MS, 30000, 1000, 3600000);
@@ -533,7 +533,7 @@ function getSchedulerSettings() {
   secondScheduleTime = null;
  }
  const minIntervalRaw = Number(getSetting('minIntervalMinutes'));
- const minIntervalMinutes = Number.isFinite(minIntervalRaw) && minIntervalRaw > 0
+ const minIntervalMinutes = Number.isFinite(minIntervalRaw) && minIntervalRaw >= 0
   ? Math.floor(minIntervalRaw)
   : DEFAULT_BROADCAST_INTERVAL_MINUTES;
  const enabledRaw = getSetting('scheduleEnabled');
@@ -1290,7 +1290,10 @@ function getSessionStartRows(config) {
 }
 
 function buildRuntimePlan(targetDate, posts, config, options = {}) {
- const immediateGraceMinutes = Math.max(1, Number(config?.minIntervalMinutes) || DEFAULT_BROADCAST_INTERVAL_MINUTES);
+ const configuredGrace = Number(config?.minIntervalMinutes);
+ const immediateGraceMinutes = Number.isFinite(configuredGrace) && configuredGrace >= 0
+  ? Math.floor(configuredGrace)
+  : DEFAULT_BROADCAST_INTERVAL_MINUTES;
  const intervalMinutes = 0;
  const sortedPosts = [...(posts || [])].sort(compareCompanyPosts);
  const perPostCounts = new Map(sortedPosts.map((post) => [Number(post?.id || 0), 0]));
@@ -1932,7 +1935,7 @@ app.put('/settings', (req, res) => {
  if (secondScheduleTime && scheduleTime === secondScheduleTime) {
   return badRequest(res, 'First and second start time must be different');
  }
- if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 1 || minIntervalMinutes > 1440) {
+ if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 0 || minIntervalMinutes > 1440) {
   return badRequest(res, 'Invalid interval minutes');
  }
 
@@ -2296,7 +2299,7 @@ app.get('/schedule/forecast', (req, res) => {
  if (secondScheduleTime && scheduleTime === secondScheduleTime) {
   return badRequest(res, 'First and second start time must be different');
  }
- if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 1 || minIntervalMinutes > 1440) {
+ if (!Number.isFinite(minIntervalMinutes) || minIntervalMinutes < 0 || minIntervalMinutes > 1440) {
   return badRequest(res, 'Invalid interval minutes');
  }
 

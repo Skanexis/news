@@ -135,6 +135,19 @@ test('markInvalidPendingScheduleItems fails pending items for inactive posts', (
  assert.match(String(row.error || ''), /inactive or outside campaign date/i);
 });
 
+test('posts without end date stay eligible until paused', () => {
+ const today = getCurrentDateString();
+ const companyId = seedCompany();
+ const postId = seedPost({ companyId, startDate: today, endDate: null, active: 1 });
+ const scheduleId = seedScheduleItem({ postId, scheduledAt: `${today}T11:30:00` });
+
+ markInvalidPendingScheduleItems();
+
+ const row = db.prepare('SELECT status,error FROM schedule_items WHERE id = ?').get(scheduleId);
+ assert.equal(row.status, 'pending');
+ assert.equal(row.error, null);
+});
+
 test('processDueSchedule does not claim/send when scheduler is disabled', async () => {
  const today = getCurrentDateString();
  const companyId = seedCompany();

@@ -46,6 +46,8 @@ const TELEGRAM_API_TIMEOUT_MS = parsePositiveInt(process.env.TELEGRAM_API_TIMEOU
 const TELEGRAM_API_MAX_RETRIES = parsePositiveInt(process.env.TELEGRAM_API_MAX_RETRIES, 2, 0, 6);
 const TELEGRAM_API_RETRY_BASE_MS = parsePositiveInt(process.env.TELEGRAM_API_RETRY_BASE_MS, 1000, 100, 30000);
 const TELEGRAM_API_RETRY_MAX_MS = parsePositiveInt(process.env.TELEGRAM_API_RETRY_MAX_MS, 15000, 1000, 120000);
+const TELEGRAM_DELIVERY_MAX_RETRIES = parsePositiveInt(process.env.TELEGRAM_DELIVERY_MAX_RETRIES, 8, 1, 100);
+const TELEGRAM_DELIVERY_RETRY_MINUTES = parsePositiveInt(process.env.TELEGRAM_DELIVERY_RETRY_MINUTES, 30, 1, 1440);
 
 app.use((req, res, next) => {
  const requestOrigin = normalizeText(req.headers.origin);
@@ -93,6 +95,25 @@ function maxDateString(...values) {
  const valid = values.filter(isValidDateString);
  if (!valid.length) return null;
  return valid.sort().slice(-1)[0];
+}
+
+function normalizePostStartDate(value) {
+ const normalized = normalizeText(value);
+ if (!normalized) return getCurrentDateString();
+ return isValidDateString(normalized) ? normalized : null;
+}
+
+function normalizePostEndDate(value) {
+ return isValidDateString(value) ? value : null;
+}
+
+function isPostActiveForDate(post, targetDate) {
+ if (!post || Number(post.active) !== 1 || !isValidDateString(targetDate)) return false;
+ const startDate = normalizePostEndDate(post.startDate);
+ const endDate = normalizePostEndDate(post.endDate);
+ if (startDate && startDate > targetDate) return false;
+ if (endDate && endDate < targetDate) return false;
+ return true;
 }
 
 function ensureColumn(table, column, definition) {
@@ -504,6 +525,15 @@ function nowLocalIso() {
  return `${now.year}-${pad(now.month)}-${pad(now.day)}T${pad(now.hour)}:${pad(now.minute)}:${pad(now.second)}`;
 }
 
+function addMinutesToNowLocalIso(minutes) {
+ const now = resolveNowParts();
+ const date = new Date(now.year, now.month - 1, now.day, now.hour, now.minute, now.second);
+ const delayMinutes = Number.isFinite(Number(minutes)) ? Math.max(1, Math.floor(Number(minutes))) : 1;
+ date.setMinutes(date.getMinutes() + delayMinutes);
+ const pad = (num) => String(num).padStart(2, '0');
+ return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 function getPrimarySchedulerDefault() {
  const cronMatch = String(CRON_TIME || '').match(/^(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+\*$/);
  if (cronMatch) {
@@ -572,6 +602,15 @@ function formatTelegramApiError(method, message) {
  return `Telegram ${method} failed: ${safeMessage}`;
 }
 
+function createTelegramApiError(method, message, meta = {}) {
+ const error = new Error(formatTelegramApiError(method, message));
+ error.telegramStatus = Number(meta.status || 0) || null;
+ error.telegramErrorCode = Number(meta.errorCode || 0) || null;
+ error.retryAfterSeconds = Number(meta.retryAfterSeconds || 0) || null;
+ error.retryable = Boolean(meta.retryable);
+ return error;
+}
+
 function isRetryableTelegramStatus(status) {
  return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
@@ -616,6 +655,45 @@ function getTelegramRetryDelayMs(attempt, retryAfterSeconds) {
  return Math.min(expDelay + jitterMs, TELEGRAM_API_RETRY_MAX_MS);
 }
 
+function parseRetryAfterSecondsFromMessage(message) {
+ const text = String(message || '');
+ const match = text.match(/retry(?:\s+after|\s+in)?\s+(\d+)/i);
+ if (!match) return null;
+ const value = Number(match[1]);
+ return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+}
+
+function isRetryableTelegramDeliveryError(error) {
+ if (!error) return false;
+ if (error.retryable) return true;
+ const status = Number(error.telegramStatus || 0);
+ const code = Number(error.telegramErrorCode || 0);
+ if (isRetryableTelegramStatus(status) || code === 429) return true;
+ const message = String(error.message || '').toLowerCase();
+ return (
+  message.includes('too many requests') ||
+  message.includes('retry after') ||
+  message.includes('flood control') ||
+  message.includes('429') ||
+  message.includes('timed out') ||
+  message.includes('network') ||
+  message.includes('socket') ||
+  message.includes('fetch failed') ||
+  message.includes('econnreset') ||
+  message.includes('eai_again') ||
+  message.includes('telegram request failed after retries') ||
+  /\b5\d\d\b/.test(message)
+ );
+}
+
+function getDeliveryRetryDelayMinutes(error) {
+ const retryAfterSeconds = Number(error?.retryAfterSeconds || 0) || parseRetryAfterSecondsFromMessage(error?.message);
+ if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+  return Math.max(1, Math.ceil(retryAfterSeconds / 60));
+ }
+ return TELEGRAM_DELIVERY_RETRY_MINUTES;
+}
+
 async function telegramApi(method, payload = {}) {
  if (!process.env.TELEGRAM_BOT_TOKEN) {
   throw new Error('Telegram bot token not set');
@@ -639,7 +717,7 @@ async function telegramApi(method, payload = {}) {
     await sleep(getTelegramRetryDelayMs(attempt));
     continue;
    }
-   throw new Error(formatTelegramApiError(method, error?.message || error));
+   throw createTelegramApiError(method, error?.message || error, { retryable: isRetryableTelegramNetworkError(error) });
   } finally {
    clearTimeout(timeoutHandle);
   }
@@ -660,9 +738,14 @@ async function telegramApi(method, payload = {}) {
    || normalizeText(data?.error)
    || normalizeText(response.statusText)
    || `Telegram API error (${status || 'unknown'})`;
-  throw new Error(formatTelegramApiError(method, message));
+  throw createTelegramApiError(method, message, {
+   status,
+   errorCode,
+   retryAfterSeconds: data?.parameters?.retry_after,
+   retryable: isRetryableTelegramStatus(status) || errorCode === 429
+  });
  }
- throw new Error(formatTelegramApiError(method, 'Telegram request failed after retries'));
+ throw createTelegramApiError(method, 'Telegram request failed after retries', { retryable: true });
 }
 
 async function downloadTelegramFile(fileId, nameHint) {
@@ -801,14 +884,14 @@ async function handleTelegramMessage(message) {
 async function pullTelegramUpdates() {
  const offsetValue = Number(getSetting('telegramUpdateOffset') || 0);
  const payload = {
-  allowed_updates: ['message', 'channel_post']
+  allowed_updates: ['message', 'channel_post', 'edited_message', 'edited_channel_post']
  };
  if (offsetValue) payload.offset = offsetValue + 1;
  const updates = await telegramApi('getUpdates', payload);
  let maxUpdate = offsetValue;
  for (const update of updates) {
   if (update.update_id && update.update_id > maxUpdate) maxUpdate = update.update_id;
-  const message = update.channel_post || update.message;
+  const message = update.edited_channel_post || update.edited_message || update.channel_post || update.message;
   if (message) {
    await handleTelegramMessage(message);
   }
@@ -817,8 +900,8 @@ async function pullTelegramUpdates() {
  return updates.length;
 }
 
-async function sendTelegramPost(post) {
- const chatId = normalizeText(process.env.TELEGRAM_CHANNEL_ID);
+async function sendTelegramPost(post, options = {}) {
+ const chatId = normalizeText(options.chatId) || normalizeText(process.env.TELEGRAM_CHANNEL_ID);
  if (!chatId) throw new Error('TELEGRAM_CHANNEL_ID is required');
  const replyMarkup = buildTelegramReplyMarkup(post);
 
@@ -1196,7 +1279,10 @@ function getActiveTelegramPostsForDate(targetDate) {
    FROM posts
    JOIN companies ON posts.companyId = companies.id
    LEFT JOIN links ON posts.linkId = links.id
-   WHERE posts.active=1 AND posts.startDate<=? AND posts.endDate>=? AND posts.platform = 'telegram'
+   WHERE posts.active=1
+    AND posts.platform = 'telegram'
+    AND (posts.startDate IS NULL OR posts.startDate = '' OR posts.startDate <= ?)
+    AND (posts.endDate IS NULL OR posts.endDate = '' OR posts.endDate >= ?)
    ORDER BY LOWER(companies.name) ASC, posts.id ASC
   `).all(targetDate, targetDate);
 }
@@ -1294,7 +1380,7 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
  const immediateGraceMinutes = Number.isFinite(configuredGrace) && configuredGrace >= 0
   ? Math.floor(configuredGrace)
   : DEFAULT_BROADCAST_INTERVAL_MINUTES;
- const intervalMinutes = 0;
+ const intervalMinutes = immediateGraceMinutes;
  const sortedPosts = [...(posts || [])].sort(compareCompanyPosts);
  const perPostCounts = new Map(sortedPosts.map((post) => [Number(post?.id || 0), 0]));
  const sessionRows = getSessionStartRows(config);
@@ -1350,7 +1436,7 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
   let plannedPublications = 0;
   let overflowSkipped = 0;
   for (const post of postsForSession) {
-   const candidateMinutes = startMinutes;
+   const candidateMinutes = startMinutes + (plannedPublications * intervalMinutes);
    if (candidateMinutes >= maxDayMinutes) {
     overflowSkipped += 1;
     continue;
@@ -1368,7 +1454,7 @@ function buildRuntimePlan(targetDate, posts, config, options = {}) {
   }
 
   const endMinutes = plannedPublications > 0
-   ? startMinutes
+   ? startMinutes + ((plannedPublications - 1) * intervalMinutes)
    : null;
   sessions.push({
    sessionIndex: sessionRow.sessionIndex,
@@ -1471,6 +1557,7 @@ function generateDailySchedule(date, startFromNow = true, options = {}) {
    WHERE status = 'pending'
     AND scheduledAt >= ?
     AND scheduledAt <= ?
+    AND COALESCE(retryCount, 0) = 0
   `).run(nowIsoForDate, dayEnd);
 
   let inserted = 0;
@@ -1488,7 +1575,7 @@ function generateDailySchedule(date, startFromNow = true, options = {}) {
    `).get(slot.post.id, scheduledAt);
    if (existingNonPending?.id) continue;
    db.prepare(`
-    INSERT INTO schedule_items (postId, scheduledAt, status, createdAt, sessionIndex)
+   INSERT INTO schedule_items (postId, scheduledAt, status, createdAt, sessionIndex)
     VALUES (?,?,?,?,?)
    `).run(slot.post.id, scheduledAt, 'pending', createdAt, Number(slot.sessionIndex) || null);
    inserted += 1;
@@ -1534,6 +1621,24 @@ function reclaimStaleProcessingItems(timeoutMinutes = 120) {
  `).run(threshold);
 }
 
+function rescheduleTelegramDelivery(scheduleId, error, retryCount = 0) {
+ const nextRetryCount = Math.max(0, Number(retryCount) || 0) + 1;
+ if (nextRetryCount > TELEGRAM_DELIVERY_MAX_RETRIES) return false;
+ const delayMinutes = getDeliveryRetryDelayMinutes(error);
+ const retryAt = addMinutesToNowLocalIso(delayMinutes);
+ db.prepare(`
+  UPDATE schedule_items
+   SET status = 'pending',
+    scheduledAt = ?,
+    sentAt = NULL,
+    error = ?,
+    processingStartedAt = NULL,
+    retryCount = ?
+   WHERE id = ?
+ `).run(retryAt, error?.message || 'Telegram temporary delivery error', nextRetryCount, scheduleId);
+ return { retryAt, retryCount: nextRetryCount, delayMinutes };
+}
+
 function markExpiredPendingScheduleItems(currentDate) {
  if (!isValidDateString(currentDate)) return;
  const dayStart = `${currentDate}T00:00:00`;
@@ -1565,8 +1670,8 @@ function markInvalidPendingScheduleItems() {
       AND (
        posts.platform <> 'telegram'
        OR COALESCE(posts.active, 0) <> 1
-       OR posts.startDate > substr(schedule_items.scheduledAt, 1, 10)
-       OR posts.endDate < substr(schedule_items.scheduledAt, 1, 10)
+       OR (posts.startDate IS NOT NULL AND posts.startDate <> '' AND posts.startDate > substr(schedule_items.scheduledAt, 1, 10))
+       OR (posts.endDate IS NOT NULL AND posts.endDate <> '' AND posts.endDate < substr(schedule_items.scheduledAt, 1, 10))
       )
     )
  `).run(updatedAt);
@@ -1586,8 +1691,8 @@ function claimNextDueScheduleItem(nowIso, currentDate) {
     AND schedule_items.scheduledAt <= ?
     AND posts.platform = 'telegram'
     AND COALESCE(posts.active, 0) = 1
-    AND posts.startDate <= substr(schedule_items.scheduledAt, 1, 10)
-    AND posts.endDate >= substr(schedule_items.scheduledAt, 1, 10)
+    AND (posts.startDate IS NULL OR posts.startDate = '' OR posts.startDate <= substr(schedule_items.scheduledAt, 1, 10))
+    AND (posts.endDate IS NULL OR posts.endDate = '' OR posts.endDate >= substr(schedule_items.scheduledAt, 1, 10))
    ORDER BY schedule_items.scheduledAt ASC, schedule_items.id ASC
    LIMIT 1
   `).get(dayStart, nowIso);
@@ -1633,6 +1738,7 @@ async function processDueSchedule(force = false) {
      schedule_items.createdAt,
      schedule_items.sentAt,
      schedule_items.processingStartedAt,
+     schedule_items.retryCount,
      posts.*,
      companies.name as companyName,
      links.code as linkCode
@@ -1661,24 +1767,26 @@ async function processDueSchedule(force = false) {
     continue;
    }
    const scheduledDate = toDatePart(item.scheduledAt);
-   const inCampaignWindow = Number(item.active) === 1 &&
-    isValidDateString(item.startDate) &&
-    isValidDateString(item.endDate) &&
-    isValidDateString(scheduledDate) &&
-    item.startDate <= scheduledDate &&
-    item.endDate >= scheduledDate;
+   const inCampaignWindow = isPostActiveForDate(item, scheduledDate);
    if (!inCampaignWindow) {
     db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
      .run('failed', sentAt, 'Skipped: post inactive or outside campaign date', null, item.scheduleId);
     continue;
    }
    try {
-    const deliveryMeta = await sendTelegramPost(item);
-    db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
-     .run('sent', sentAt, null, null, item.scheduleId);
+   const deliveryMeta = await sendTelegramPost(item);
+   db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
+    .run('sent', sentAt, null, null, item.scheduleId);
     insertLog(item, 'sent', null, 'auto', null, deliveryMeta);
     setSetting('lastSentAt', sentAt);
    } catch (e) {
+    if (isRetryableTelegramDeliveryError(e)) {
+     const retry = rescheduleTelegramDelivery(item.scheduleId, e, item.retryCount);
+     if (retry) {
+      insertLog(item, 'pending', `${e.message}. Retry #${retry.retryCount} at ${retry.retryAt}`, 'auto_retry');
+      continue;
+     }
+    }
     db.prepare('UPDATE schedule_items SET status=?, sentAt=?, error=?, processingStartedAt=? WHERE id=?')
      .run('failed', sentAt, e.message, null, item.scheduleId);
     insertLog(item, 'failed', e.message, 'auto');
@@ -1740,6 +1848,35 @@ async function publishPostNow(postId) {
  }
 }
 
+async function backupAllPostsToTelegram() {
+ const backupChatId = normalizeText(process.env.TELEGRAM_BACKUP_CHANNEL_ID || process.env.BACKUP_CHANNEL_ID);
+ if (!backupChatId) {
+  throw new Error('TELEGRAM_BACKUP_CHANNEL_ID is required');
+ }
+ const posts = db.prepare(`
+ SELECT posts.*,
+   companies.name as companyName,
+   links.code as linkCode
+  FROM posts
+  JOIN companies ON posts.companyId = companies.id
+  LEFT JOIN links ON posts.linkId = links.id
+  WHERE posts.platform = 'telegram'
+  ORDER BY LOWER(companies.name) ASC, posts.id ASC
+ `).all();
+ const result = { total: posts.length, sent: 0, failed: 0, errors: [] };
+ for (const post of posts) {
+  try {
+   await sendTelegramPost(post, { chatId: backupChatId });
+   result.sent += 1;
+  } catch (e) {
+   const error = e?.message || 'Backup publish failed';
+   result.failed += 1;
+   result.errors.push({ postId: post.id, error });
+  }
+ }
+ return result;
+}
+
 db.prepare(`CREATE TABLE IF NOT EXISTS companies (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  name TEXT,
@@ -1793,7 +1930,8 @@ db.prepare(`CREATE TABLE IF NOT EXISTS schedule_items (
  createdAt TEXT,
  sentAt TEXT,
  processingStartedAt TEXT,
- sessionIndex INTEGER
+ sessionIndex INTEGER,
+ retryCount INTEGER DEFAULT 0
 )`).run();
 
 db.prepare(`CREATE TABLE IF NOT EXISTS logs (
@@ -1861,6 +1999,7 @@ ensureColumn('logs', 'sentViews', 'INTEGER');
 ensureColumn('logs', 'viewsUpdatedAt', 'TEXT');
 ensureColumn('schedule_items', 'processingStartedAt', 'TEXT');
 ensureColumn('schedule_items', 'sessionIndex', 'INTEGER');
+ensureColumn('schedule_items', 'retryCount', 'INTEGER DEFAULT 0');
 db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_message_chat ON logs(platform, sentMessageId, sentChatId)').run();
 db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_platform_status_id ON logs(platform, status, id DESC)').run();
 db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_platform_date ON logs(platform, date)').run();
@@ -1878,6 +2017,14 @@ ensureColumn('drafts', 'mimeType', 'TEXT');
 ensureColumn('drafts', 'filePath', 'TEXT');
 ensureColumn('drafts', 'buttons', 'TEXT');
 ensureColumn('drafts', 'createdAt', 'TEXT');
+
+db.prepare(`
+ UPDATE posts
+  SET endDate = NULL
+  WHERE platform = 'telegram'
+   AND endDate IS NOT NULL
+   AND endDate <> ''
+`).run();
 
 app.use('/uploads', express.static(uploadsDir));
 cleanupOrphanScheduleItems();
@@ -2087,10 +2234,11 @@ app.post('/posts', (req, res) => {
  if (!normalizedCompanyId) return badRequest(res, 'Company is required');
  const platform = 'telegram';
  if (!allowedPlatforms.has(platform)) return badRequest(res, 'Invalid platform');
- if (!isValidDateString(startDate) || !isValidDateString(endDate)) {
-  return badRequest(res, 'Invalid date format');
- }
- if (startDate > endDate) return badRequest(res, 'Start date must be before end date');
+ const normalizedStartDate = normalizePostStartDate(startDate);
+ const normalizedEndDate = normalizePostEndDate(endDate);
+ if (startDate && !normalizedStartDate) return badRequest(res, 'Invalid start date format');
+ if (endDate && !normalizedEndDate) return badRequest(res, 'Invalid end date format');
+ if (normalizedEndDate && normalizedStartDate > normalizedEndDate) return badRequest(res, 'Start date must be before end date');
  const company = db.prepare('SELECT id FROM companies WHERE id = ?').get(normalizedCompanyId);
  if (!company) return badRequest(res, 'Company not found');
 
@@ -2117,8 +2265,8 @@ app.post('/posts', (req, res) => {
   normalizedCompanyId,
   bodyText,
   platform,
-  startDate,
-  endDate,
+  normalizedStartDate,
+  normalizedEndDate,
   activeValue,
   normalizedDraftId,
   normalizedCtaUrl,
@@ -2149,10 +2297,11 @@ app.put('/posts/:id', (req, res) => {
  if (!normalizedCompanyId) return badRequest(res, 'Company is required');
  const platform = 'telegram';
  if (!allowedPlatforms.has(platform)) return badRequest(res, 'Invalid platform');
- if (!isValidDateString(startDate) || !isValidDateString(endDate)) {
-  return badRequest(res, 'Invalid date format');
- }
- if (startDate > endDate) return badRequest(res, 'Start date must be before end date');
+ const normalizedStartDate = normalizePostStartDate(startDate);
+ const normalizedEndDate = normalizePostEndDate(endDate);
+ if (startDate && !normalizedStartDate) return badRequest(res, 'Invalid start date format');
+ if (endDate && !normalizedEndDate) return badRequest(res, 'Invalid end date format');
+ if (normalizedEndDate && normalizedStartDate > normalizedEndDate) return badRequest(res, 'Start date must be before end date');
  const company = db.prepare('SELECT id FROM companies WHERE id = ?').get(normalizedCompanyId);
  if (!company) return badRequest(res, 'Company not found');
 
@@ -2194,8 +2343,8 @@ app.put('/posts/:id', (req, res) => {
    normalizedCompanyId,
    bodyText,
    platform,
-   startDate,
-   endDate,
+   normalizedStartDate,
+   normalizedEndDate,
    activeValue,
    normalizedDraftId,
    normalizedCtaUrl,
@@ -2221,6 +2370,15 @@ app.delete('/posts/:id', (req, res) => {
  res.send({ ok: true });
 });
 
+app.post('/posts/backup', async (req, res) => {
+ try {
+  const result = await backupAllPostsToTelegram();
+  res.send({ ok: result.failed === 0, result });
+ } catch (e) {
+  res.status(500).send({ ok: false, error: e.message });
+ }
+});
+
 app.post('/posts/:id/publish', async (req, res) => {
  const id = Number(req.params.id);
  if (!id) return badRequest(res, 'Invalid post id');
@@ -2236,15 +2394,11 @@ app.post('/posts/:id/publish', async (req, res) => {
 app.post('/posts/:id/renew', (req, res) => {
  const id = Number(req.params.id);
  if (!id) return badRequest(res, 'Invalid post id');
- const post = db.prepare('SELECT id, startDate, endDate FROM posts WHERE id = ?').get(id);
+ const post = db.prepare('SELECT id FROM posts WHERE id = ?').get(id);
  if (!post) return res.status(404).send({ ok: false, error: 'Post not found' });
- const today = getCurrentDateString();
- const base = maxDateString(post.endDate, post.startDate, today) || today;
- const newEndDate = addDaysToDateString(base, 30);
- if (!newEndDate) return res.status(500).send({ ok: false, error: 'Renew failed' });
- db.prepare('UPDATE posts SET endDate=?, active=1 WHERE id=?').run(newEndDate, id);
+ db.prepare('UPDATE posts SET endDate=NULL, active=1 WHERE id=?').run(id);
  invalidateDerivedCaches();
- res.send({ ok: true, endDate: newEndDate });
+ res.send({ ok: true, endDate: null });
 });
 
 app.post('/schedule/run', async (req, res) => {
@@ -2363,7 +2517,7 @@ app.post('/telegram/webhook', async (req, res) => {
   if (header !== secret) return res.status(401).send({ ok: false });
  }
  const update = req.body;
- const message = update?.channel_post || update?.message;
+ const message = update?.edited_channel_post || update?.edited_message || update?.channel_post || update?.message;
  if (message) {
   await handleTelegramMessage(message);
  }

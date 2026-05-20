@@ -23,18 +23,20 @@
   - Imposta `TELEGRAM_WEBHOOK_SECRET` in `.env`.
   - Chiama `setWebhook` di Telegram con URL pubblico:
     - `https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook`
-    - Body JSON: `{"url":"https://your-public-url/telegram/webhook","secret_token":"your-secret","allowed_updates":["message","channel_post"]}`
+    - Body JSON: `{"url":"https://your-public-url/telegram/webhook","secret_token":"your-secret","allowed_updates":["message","channel_post","edited_message","edited_channel_post"]}`
 - Opzione B: Pull aggiornamenti (senza webhook)
   - Clicca **Sincronizza bozze** nell'interfaccia (chiama `/telegram/pull`).
   - Nota: Telegram non permette `getUpdates` quando un webhook è attivo.
 
 Le bozze acquisite appaiono nel blocco **Bozze Telegram** e possono essere collegate ai post.
+Se modifichi un messaggio gia acquisito su Telegram, il webhook aggiorna la stessa bozza invece di crearne una nuova.
 
 ## Impostazioni pianificazione (UI admin)
 - Primo avvio automatico: inizio della prima sessione giornaliera.
 - Secondo avvio automatico (opzionale): inizio della seconda sessione giornaliera.
 - Intervallo invio configurabile in minuti (es. 5, 10, 15) tra i post.
 - Ogni sessione prova a inviare tutti i post attivi del giorno.
+- I post non hanno scadenza obbligatoria: restano in rotazione finche sono attivi, oppure finche li elimini.
 - Nel blocco forecast viene mostrata anche la fine stimata del primo ciclo.
 
 ## Analitiche link
@@ -45,6 +47,7 @@ Le bozze acquisite appaiono nel blocco **Bozze Telegram** e possono essere colle
 
 ## Pubblicazione manuale e pianificazione
 - Usa **Pubblica** per inviare un post subito.
+- Usa **Backup canale** per inviare tutti i post salvati al canale `TELEGRAM_BACKUP_CHANNEL_ID`.
 - Usa **Esegui Pianificazione** per generare la pianificazione del giorno su richiesta.
 - L'avvio automatico genera/aggiorna la pianificazione ai due orari configurati.
 - Con **Salva Impostazioni** le nuove pianificazioni partono dal giorno successivo; con **Salva + Avvia Oggi** partono subito.
@@ -53,7 +56,10 @@ Le bozze acquisite appaiono nel blocco **Bozze Telegram** e possono essere colle
 ## Variabili ambiente (.env)
 `TELEGRAM_BOT_TOKEN=...`
 `TELEGRAM_CHANNEL_ID=@channel`  # fallback opzionale per Telegram
+`TELEGRAM_BACKUP_CHANNEL_ID=@backup_channel`
 `TELEGRAM_WEBHOOK_SECRET=...`
+`TELEGRAM_DELIVERY_MAX_RETRIES=8`
+`TELEGRAM_DELIVERY_RETRY_MINUTES=30`
 `PUBLIC_BASE_URL=https://your-public-url`
 `CRON_TIME=0 9 * * *`
 `SECOND_SCHEDULE_TIME=18:00`
